@@ -1,6 +1,7 @@
 BIG=50000
 OPT=-Os
-LDFLAGS=-Wl,-gc-sections -Wl,-u,vfprintf -lprintf_min
+LDFLAGS=-Wl,-gc-sections 
+#-Wl,-u,vfprintf -lprintf_min
 
 #OPT=-Os
 CFLAGS=-I/usr/avr/include -pipe -fwhole-program -mmcu=atmega32 $(OPT) $(LDFLAGS) -Wall -Winline $(INLINE)

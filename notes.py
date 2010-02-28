@@ -51,13 +51,13 @@ for f in note_hz:
     sm_bar = 0
     sm_presc = 0
     sm_div = 0
-    for presc in (64, 128):
-        for bar in range(62, 66):
-            er, div, real_bar = error(f, dest_B=bar, presc=presc)
-            if er < sm_err:
-                sm_err = er
-                sm_bar = real_bar
-                sm_div = div
-                sm_presc = presc
+    presc = 128
+    for bar in range(62, 66):
+        er, div, real_bar = error(f, dest_B=bar, presc=presc)
+        if er < sm_err:
+            sm_err = er
+            sm_bar = real_bar
+            sm_div = div
+            sm_presc = presc
     print "	/* f=%.3f presc=%d div=%d bar=%d err=%.5f  */" % (f, sm_presc, sm_div, sm_bar, sm_err)
     print "	{%d, %d, %dU}, " % (sm_div, sm_bar, f * 100)
