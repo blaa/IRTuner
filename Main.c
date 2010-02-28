@@ -6,142 +6,11 @@
 #include <avr/io.h>
 #include <avr/interrupt.h>
 #include <avr/sleep.h>
-#include <util/delay.h>
+#include <avr/pgmspace.h>
 
 /*** Local includes ***/
 #include "LED.c"
 #include "Serial.c"
-
-#if 0
-#include "Light.c"
-
-/*** Current time ***/
-struct Clock {
-	unsigned char Day;
-	unsigned char Hour;
-	unsigned char Minute;
-	unsigned char Second;
-	int16_t Part;
-} Clock = {0, 0, 0, 0, 0};
-
-/** Schedule slicing interrupt in 1 / (16*10^6/64/OCR0) s */
-static inline void TimerSchedule()
-{
-	TCNT0 = 0;
-	TIFR |= (1<<OCF0);	/* Clear interrupt */
-	TIMSK |= (1<<OCIE0);	/* Enable interrupt reception */
-}
-
-/** Turn off slicing-timer interrupt */
-static inline void TimerOff()
-{
-	TIMSK &= ~(1<<OCIE0);
-}
-
-/* Power-line synchronization.
- * Called with f=4*50Hz, w=0.005s */
-volatile uint8_t CycleDone = 1;
-ISR(INT1_vect) 
-{
-	/* Update clock */
-	Clock.Part++;
-//	if (Clock.Part == (50*4)) { /* This won't work - who knows why? */
-	if (Clock.Part % (4*50) ==0) {
-		Clock.Part = 0;
-		LEDSwitch(LED_G);
-		if (++Clock.Second == 60) {
-			Clock.Second = 0;
-			LEDSwitch(LED_R);
-			if (++Clock.Minute == 60) {
-				Clock.Minute = 0;
-				if (++Clock.Hour == 24) {
-					Clock.Hour = 0;
-					++Clock.Day;
-				}
-			}
-
-		}
-	}
-
-	if (CycleDone) {
-		CycleDone = 0;
-		TimerSchedule();
-		/* Light lamps */
-		LightOn(0);
-	}
-
-	/* Turn on everything which needs to be turned on */
-	
-	/* For now, turn it */
-//	LightDimmed(0, (uint8_t)((uint16_t)Clock.Second * 170 / 60));
-
-}
-
-// 99 interrupts should come
-volatile uint8_t SliceCount;
-ISR(TIMER0_COMP_vect)
-{
-	static unsigned char i;
-
-	SliceCount++;
-
-	if (SliceCount == 95) { /* 97 seems fine (we don't miss the next 0; but make sure) */
-		SliceCount = 0;
-		CycleDone = 1;
-		TimerOff(); /* Synchronize with power line */
-		return;
-	}
-
-	for (i = 0; i < LightCount; i++) {
-		if (Lights[i].State == L_DIMMED_ON) {
-			if (--Lights[i].TimeToOff == 0) {
-				/* Turn off */
-				LightOff(i);
-				Lights[i].State = L_DIMMED_OFF;
-			}
-		}
-	}
-}
-
-static inline void Initialize(void)
-{
-	/* Initialize zero detector interrupt */
-//  	MCUCR = (1<<ISC11)|(1<<ISC10);	/* The rising edge of INT0 generates an interrupt request */
-  	MCUCR = (1<<ISC11);		/* The falling edge of INT0 generates an interrupt request */
-//	MCUCR = (1<<ISC10);		/* Any edge of INT0 generates an interrupt request */
-
-	GICR |= (1<<INT1);
-//	PORTD |= (1<<PD2);	/* Internal pull-up */
-
-	/* Initialize time-slicing interrupt */
-	// solve((1/50 / 100) = 1/(16*10^6 / 64 / x), x), numer;
-	// | x   | slicing |
-	// | 50  | 100     |
-	// | 10  | 500     |
-	// | 100 | 10      |
-
-
-	TimerOff();
-	OCR0 = 50;
-	TCCR0 = (1<<CS01) | (1<<CS00) | (1<<WGM01); /* /64, CTC - clear timer on match */
-}
-
-void IRLedTest()
-{
-	/* f = 36kHz */
-	/* T = 0.027ms = 27us */
-
-	DDRA=(1<<PA0);
-	
-	for (;;) {
-		PORTA ^= (1<<PA0);
-//		_delay_us(27.0);
-		_delay_us(27.0/2.0);
-	}
-}
-
-#endif 
-
 
 /************************************************************************************************************
  * Guitar tunner - NOTES
@@ -226,20 +95,20 @@ void IRLedTest()
 #include "FFT/ffft.h"
 
 /* FFT Buffers */
-int16_t capture[FFT_N];
-complex_t bfly_buff[FFT_N];
-uint16_t spektrum[FFT_N/2];
+static int16_t capture[FFT_N];
+static complex_t bfly_buff[FFT_N];
+static uint16_t spektrum[FFT_N/2];
 
 
-volatile int capture_pos;               /* Position in buffer            */
-volatile int16_t adc_sum;               /* Sum of measurements           */
-volatile int16_t adc_cur;               /* Current measurement           */
-volatile int16_t background;            /* Estimated Light background    */
+static volatile int capture_pos;               /* Position in buffer            */
+static volatile int16_t adc_sum;               /* Sum of measurements           */
+static volatile int16_t adc_cur;               /* Current measurement           */
+static volatile int16_t background;            /* Estimated Light background    */
 
 /* Note to chase */
-volatile char note_current = 0;
-volatile char note_divisor = 30;
-volatile char note_bar = 30;
+static volatile char note_current = 0;
+static volatile char note_divisor = 30;
+static volatile int note_bar = 30;
 
 ISR(ADC_vect) 
 {
@@ -279,8 +148,8 @@ ISR(ADC_vect)
 
 enum { NOTE_E2 = 0, NOTE_A, NOTE_D, NOTE_G, NOTE_H, NOTE_E }; 
 struct {
-	int divisor;
-	int bar;
+	char divisor;
+	char bar;
 } notes[] = {
 
 	/* f=82.407 presc=64 div=31 bar=34 err=0.01711  */
@@ -307,7 +176,7 @@ struct {
 */
 };
 
-void do_capture(int note)
+static inline void do_capture(int note)
 {
 	/* TESTS */
 /*
@@ -334,7 +203,7 @@ void do_capture(int note)
 	while (capture_pos != FFT_N);
 }
 
-void ADCInit(void)
+static inline void ADCInit(void)
 {
 	DDRA = 0x00;
 	PORTA = 0x00;
@@ -360,8 +229,9 @@ void ADCInit(void)
 	ADCSRA |= (1<<ADEN);
 }
 
-void do_analysis(void) 
+static inline void do_analysis(void) 
 {
+	const int range_cut = 10;
 	uint16_t max = 0;
 	uint16_t max_pos;
 
@@ -379,7 +249,11 @@ void do_analysis(void)
 	avg = avg_sum = 0;
 	max = max_pos = 0;
 
-	for (i = 5; i < FFT_N / 2 - 5; i++) {
+	/* Precalculations:
+	 * 1) Calculate global maximum for reference and it's position
+	 * 2) Calculate average value for spektrum 
+	 */
+	for (i = range_cut; i < FFT_N / 2 - range_cut; i++) {
 		/* Filter out rubbish */
 		s = (spektrum[i] /= 16);
 		
@@ -387,8 +261,8 @@ void do_analysis(void)
 			continue;
 
 		/* Avg */
-		avg += i * s;
-		avg_sum += s;
+		avg += s;
+		avg_sum += 1;
 
 		if (i < note_bar) {
 			avg_before += s;
@@ -420,36 +294,106 @@ void do_analysis(void)
 	else
 		avg_after = 0;
 
+	/* Trying to get accurate: 
+	 * 1) Find maximum nearest to our bar 
+	 * 2) Average it's neighborhood
+	 */
 	uint16_t max_local;
-	uint16_t max_local_pos;
+	int16_t max_local_pos;
+	max_local = 0; 
+	max_local_pos = -300;
 
-	max_local = max_local_pos = 0;
-	/* Find maximum nearest to our bar */
-	for (i=0; i < 20; i++) {
-
-		if (note_bar - i > 5) {
-			s = spektrum[note_bar - i];
-			if (s > max / 3 && s > max_local) {
-				max_local = s;
-				max_local_pos = -i;
+	if (max > 0) {
+		s = spektrum[note_bar];
+		if (s > avg / 2) {
+			max_local = s;
+			max_local_pos = 0;
+		}
+		
+		/* Nearest 'big' bar... */
+		for (i=1; i < 15; i++) {		
+			if (note_bar - i >= range_cut) {
+				s = spektrum[note_bar - i];
+				if (s > avg / 2 && s > max_local) {
+					max_local = s;
+					max_local_pos = note_bar - i;
+				}
+			}
+			
+			if (note_bar + i < FFT_N/2 - range_cut) {
+				s = spektrum[note_bar + i];
+				if (s > avg / 2 && s > max_local) {
+					max_local = s;
+					max_local_pos = note_bar + i;
+				}
 			}
 		}
 
-		if (note_bar + i < FFT_N/2 - 5) {
-			s = spektrum[note_bar + i];
-			if (s > max / 3 && s > max_local) {
-				max_local = s;
-				max_local_pos = i;
+		printf_P(PSTR("Before update:%d\n"), max_local_pos);
+
+		/* Calculate neighborhood of local maximum! */
+		if (max_local > 0) {
+			uint32_t avg_local;
+			uint16_t avg_local_sum;
+
+			avg_local = avg_local_sum = 0;
+			for (i=1; i<=7; i++) {
+				s = spektrum[max_local_pos + i - 4];
+				avg_local += i * s;
+				avg_local_sum += s;
 			}
+			avg_local *= 10;
+			avg_local /= avg_local_sum;
+			avg_local -= 4; /* 0 should be center (max_local_pos) */
+
+			/* Fix max_local_pos */
+			/* Increase resolution */
+			max_local_pos = max_local_pos * 10;
+			max_local_pos += (uint16_t) avg_local;
+
+			printf_P(PSTR("Approx: %ld absolute new_local_max: %d\n"), avg_local, max_local_pos);
 		}
 	}
 
-	printf("Max=%u Avg/B/A=%ld/%ld/%ld Local Max=%u\n", max_pos, avg, avg_before, avg_after, max_local_pos);
+	/* Make it relative */
+	if (max_local > 0) {
+		max_local_pos -= note_bar * 10;
+	}
+
+
+	printf_P(PSTR("Before=%5ld Avg=%5ld After=%5ld\n"), avg_before, avg, avg_after);
+	if (max) 
+		printf_P(PSTR("Max=%u at %u "), max, max_pos);
+	if (max_local)
+		printf_P(PSTR("Local Max=%u relative pos=%d\n"), max_local, max_local_pos);
+	putchar('\n');
+
+	if (max_local > 15) {
+		if (max_local_pos < -15) {
+			printf_P(PSTR("Too low!\n"));
+		} else if (max_local_pos > 15) {
+			printf_P(PSTR("Too high!\n"));
+		} else {
+			printf_P(PSTR("Tuned!\n"));
+		}
+	} else if (max > 15) {
+		/* No local maximum, try with global */
+		
+		if (avg_before > avg_after) {
+			printf_P(PSTR("MUCH too low!\n"));
+		} else {
+			printf_P(PSTR("MUCH too high!\n"));
+		}
+	} else {
+		printf_P(PSTR("Strike a string!\n"));
+	}
 	
 }
-void GuitarIRTests(void)
+
+int main(void) __attribute__((naked));
+int main(void)
 {
-	int i;
+	int i, m;
 	uint16_t s;
 	LEDInit();
 	SerialInit();
@@ -463,7 +407,7 @@ void GuitarIRTests(void)
 
 	for (;;) {
 		/* Wait for buffer to fill up */
-		do_capture(NOTE_E);
+		do_capture(NOTE_D);
 
 		fft_input(capture, bfly_buff); 
 		fft_execute(bfly_buff);
@@ -480,23 +424,23 @@ void GuitarIRTests(void)
 		putchar('\n');
 		putchar('\n');
 */
+
+		printf("\nNote=%d Bar=%d\n", note_current, note_bar);
 		do_analysis();
 
-		for (i = 5; i < FFT_N / 2 - 5; i++) {
-			s = spektrum[i] / 16;
+		for (i = 10; i < FFT_N / 2 - 5; i++) {
 
-/*
 			if (i % 3 == 2) {
-				s = (spektrum[i] + spektrum[i-1] + spektrum[i-2]) / 3 / 16;
+				s = (spektrum[i] + spektrum[i-1] + spektrum[i-2]) / 3;
 				printf("\n%3u: %5u  ", i, s);
 				for (m = 0; m < s; m++) putchar('*');
 			}
-*/
+
 
 
 /*
 			if (i % 2 == 1) {
-				s = (spektrum[i] + spektrum[i-1]) / 2 / 16;
+				s = (spektrum[i] + spektrum[i-1]) / 2;
 				printf("\n%3u: %5u  ", i, s);
 				for (m = 0; m < s; m++) putchar('*');
 			}
@@ -509,62 +453,11 @@ void GuitarIRTests(void)
 */
 		}
 
-		printf("Note=%d Bar=%d\n", note_current, note_bar);
 
-/*		for (i=0; i<30; i++)
-			_delay_ms(20);
-*/
+
 
 	}
-}
 
-int main(void) __attribute__((naked));
-int main(void)
-{
-	int i;
-
-	GuitarIRTests();
-
-	DDRD |= (1<<PD6); // debug
-	PORTD |= (1<<PD6);
-
-	set_sleep_mode(SLEEP_MODE_IDLE);
-
-	LEDInit();
-	LEDOn(LED_R);
-
-//	IRLedTest();
-
-	SerialInit();
-	printf("Serial initialized\n");
-
-/*	LightInit();
-	printf("Lights initialized\n");
-*/
-
-/*	Initialize();
-	printf("Interrupts initialized \n");
-*/
-	LEDOff(LED_RGB);
-	sei();
-	
-
-	for (;;) {
-/*		sleep_mode();
-		cli();
-		i = Cl.Second;
-		Cl = Clock;
-		sei();
-		if (i != Cl.Second) { // * Second changed *
-			printf("%03d %02d:%02d.%02d [%03d]\n",
-			       Cl.Day, Cl.Hour, Cl.Minute, Cl.Second, Cl.Part);
-		} */
-		for (i=0; i<50; i++) {
-			PORTD ^= (1<<PD6); // debug
-			_delay_ms(20);
-		}
-		printf("%u\n", i);
-	}
 
 	return 0;
 }

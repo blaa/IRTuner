@@ -32,6 +32,7 @@ def table(dest_B=32, presc=128):
 
 table(dest_B=32, presc=64)
 table(dest_B=45, presc=64)
+table(dest_B=64, presc=64)
 
 
 for f in note_hz:
