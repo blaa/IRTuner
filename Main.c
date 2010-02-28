@@ -109,18 +109,18 @@ struct {
 	char bar;
 	uint16_t freq;
 } notes[] = {
-	/* f=82.407 presc=128 div=30 bar=66 err=0.22521  */
-	{30, 66, 8240U}, 
-	/* f=110.000 presc=128 div=22 bar=64 err=0.73427  */
-	{22, 64, 11000U}, 
-	/* f=146.832 presc=128 div=17 bar=66 err=1.01045  */
-	{17, 66, 14683U}, 
-	/* f=195.998 presc=128 div=12 bar=63 err=1.19250  */
-	{12, 63, 19599U}, 
-	/* f=246.942 presc=128 div=9 bar=59 err=0.71470  */
-	{9, 59, 24694U}, 
-	/* f=329.628 presc=128 div=7 bar=61 err=2.31859  */
-	{7, 61, 32962U}, 
+	/* f=82.407 presc=128 div=29 bar=32 err=0.48425 scale=64  */
+	{29, 32, 8240U}, 
+	/* f=110.000 presc=128 div=22 bar=32 err=0.73427 scale=64  */
+	{22, 32, 11000U}, 
+	/* f=146.832 presc=128 div=16 bar=31 err=1.28663 scale=64  */
+	{16, 31, 14683U}, 
+	/* f=195.998 presc=128 div=12 bar=31 err=1.93750 scale=64  */
+	{12, 31, 19599U}, 
+	/* f=246.942 presc=128 div=10 bar=33 err=0.95463 scale=64  */
+	{10, 33, 24694U}, 
+	/* f=329.628 presc=128 div=7 bar=31 err=3.04714 scale=64  */
+	{7, 31, 32962U}, 
 };
 
 const char *num2str(num_t number)
@@ -353,13 +353,6 @@ static inline void spectrum_analyse(void)
 	}
 
 
-	uint32_t harm_avg_dist = 0;
-	for (i=0; i<var(harm_cnt)-1; i++) {
-		// Average harmonics of the main harmonic 
-		harm_avg_dist += var(harms)[i+1] - var(harms)[i];
-	}
-	harm_avg_dist /= var(harm_cnt) - 1;
-	printf_P(PSTR("Average distance between harmonics: %lu\n"), harm_avg_dist);
 
 }
 
@@ -432,7 +425,7 @@ int main(void)
 	puts_P(PSTR("Init"));
 	for (;;) {
 		/* Wait for buffer to fill up */
-		do_capture(NOTE_E);
+		do_capture(NOTE_A);
 		puts_P(PSTR("Captured"));
 
 		fft_input(capture, bfly_buff); 

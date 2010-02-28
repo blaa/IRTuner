@@ -9,12 +9,12 @@ note_hz = [
 ]
 
 # 16*10^6 / 128 / 13 / D / 2  *  (32/128) = f
-def error(f, dest_B=32, presc=128):
-        D = 4807.692307692308 * dest_B / f / presc
+def error(f, dest_B=32, presc=128, scale=128):
+        D = 615384.6153846154 * dest_B / f / presc / scale
         Di = round(D)
-        Bar = 2.0799999999999996e-4 * f * Di * presc
+        Bar = 1.6249999999999998e-6 * f * Di * presc * scale
         Bari = round(Bar)
-        real_hz = 4807.692307692308 * Bari / Di / presc
+        real_hz = 615384.6153846154 * Bari / Di / presc / scale
 #        print D, Di, Bar, Bari, real_hz
         return abs(f - real_hz), Di, Bari
 
@@ -52,12 +52,15 @@ for f in note_hz:
     sm_presc = 0
     sm_div = 0
     presc = 128
-    for bar in range(62, 66):
-        er, div, real_bar = error(f, dest_B=bar, presc=presc)
-        if er < sm_err:
-            sm_err = er
-            sm_bar = real_bar
-            sm_div = div
-            sm_presc = presc
-    print "	/* f=%.3f presc=%d div=%d bar=%d err=%.5f  */" % (f, sm_presc, sm_div, sm_bar, sm_err)
+    scale = 64
+    bar = scale/2 
+
+    er, div, real_bar = error(f, dest_B=bar, presc=presc, scale=scale)
+    if er < sm_err:
+        sm_err = er
+        sm_bar = real_bar
+        sm_div = div
+        sm_presc = presc
+        
+    print "	/* f=%.3f presc=%d div=%d bar=%d err=%.5f scale=%d  */" % (f, sm_presc, sm_div, sm_bar, sm_err, scale)
     print "	{%d, %d, %dU}, " % (sm_div, sm_bar, f * 100)
