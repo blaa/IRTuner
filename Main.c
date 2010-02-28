@@ -95,13 +95,52 @@
 #include "FFT/ffft.h"
 
 /* FFT Buffers */
-static int16_t capture[FFT_N];
-static complex_t bfly_buff[FFT_N];
-static uint16_t spektrum[FFT_N/2];
 
+/* num_t has 2 decimal places. */
+typedef int32_t num_t;
+
+const char spectrum_min = 10;
+const char spectrum_max = FFT_N/2 - 10;
+const int harm_max = 15;
+
+
+union buffs {
+	int16_t capture[FFT_N];      /* 512 bytes */
+	uint16_t spectrum[FFT_N/2];  /* 256 bytes */
+};
+static union buffs A;
+
+static union {
+	complex_t bfly_buff[FFT_N];   /* 1024 bytes */
+	struct {
+		/*** Variables for analysis ***/
+		uint16_t max;
+		uint16_t max_pos;
+
+		uint16_t avg_sum;
+		uint32_t avg;
+
+		uint16_t avg_before_sum, avg_after_sum;
+		uint32_t avg_before, avg_after;
+
+		/* We have to find all harmonics */
+		num_t harms[15];
+		uint16_t harm_wage[15];
+		int harm_main; /* The one with biggest wage */
+		uint16_t harm_main_wage;
+		int harm_cnt;
+
+		uint16_t running_avg;
+		char dist_between_max;
+
+		int times;
+		int error;
+
+		char num2str_buff[10];
+	} v;
+} B;
 
 static volatile int capture_pos;               /* Position in buffer            */
-static volatile int16_t adc_sum;               /* Sum of measurements           */
 static volatile int16_t adc_cur;               /* Current measurement           */
 static volatile int16_t background;            /* Estimated Light background    */
 
@@ -117,7 +156,6 @@ ISR(ADC_vect)
 
 	/* Read measurement. It will get averaged */
 	tmp = ADC - 512;
-	adc_sum += tmp - background;
 
 	/* Calculate background all the time */
 	background *= 7;
@@ -130,77 +168,74 @@ ISR(ADC_vect)
 	}
 
   	/* Average all measurements into one */
-//	adc_cur = adc_sum / note_divisor;
 	adc_cur = tmp - background;
-	adc_sum = 0;
 
 	/* Ignore saving if buffer is full */
 	if (capture_pos >= FFT_N)
 		return;
 
 	/* Multiply to better fit FFT */
-	adc_cur *= 200;
+	adc_cur *= 500;
 
 	/* Store */
-	capture[capture_pos] = adc_cur;
+	A.capture[capture_pos] = adc_cur;
 	++capture_pos;
+	
+	/* After next measurement we're full! */
+	if (capture_pos == FFT_N) {
+		ADCSRA &= ~(1<<ADATE);
+	}
 }
 
 enum { NOTE_E2 = 0, NOTE_A, NOTE_D, NOTE_G, NOTE_H, NOTE_E }; 
 struct {
 	char divisor;
 	char bar;
+	uint16_t freq;
 } notes[] = {
-
-	/* f=82.407 presc=64 div=31 bar=34 err=0.01711  */
-	{31, 31},
-	/* f=110.000 presc=64 div=28 bar=41 err=0.00258  */
-	{28, 42},
-	/* f=146.832 presc=64 div=22 bar=43 err=0.00617  */
-	{22, 46},
-	/* f=195.998 presc=64 div=23 bar=60 err=0.03228  */
-	{23, 61},
-	/* f=246.942 presc=64 div=14 bar=46 err=0.11851  */
-	{14, 45},
-	/* f=329.628 presc=64 div=13 bar=57 err=0.25485  */
-	{13, 58},
-	
-	/* For prescaler / 128 */
-/*
-	{27, 56}, // Error: 0.0637 //
-	{20, 40}, // Error: 0.0026 //
-	{15, 42}, // Error: 0.0062 //
-	{11, 45}, // Error: 0.1492 //
-	{9, 43},  // Error: 0.1185 //
-	{7, 40},  // Error: 0.9008 //
-*/
+	/* f=82.407 presc=128 div=30 bar=66 err=0.22521  */
+	{30, 66, 8240U}, 
+	/* f=110.000 presc=64 div=43 bar=63 err=0.05982  */
+	{43, 63, 11000U}, 
+	/* f=146.832 presc=128 div=17 bar=66 err=1.01045  */
+	{17, 66, 14683U}, 
+	/* f=195.998 presc=64 div=25 bar=65 err=0.68550  */
+	{25, 65, 19599U}, 
+	/* f=246.942 presc=128 div=9 bar=59 err=0.71470  */
+	{9, 59, 24694U}, 
+	/* f=329.628 presc=64 div=15 bar=66 err=0.90085  */
+	{15, 66, 32962U}, 
 };
+
+const char *num2str(num_t number)
+{
+	int16_t rest = number % 100;
+	if (rest < 0) rest = -rest;
+	sprintf_P(B.v.num2str_buff, PSTR("%ld.%02d"), (int32_t)number / 100, rest);
+	return B.v.num2str_buff;
+}
+
+/* bar should be multiplied by 10, e.g. 0 - 1280 */
+static num_t bar2hz(const num_t bar)
+{
+	/* for prescaler /16: f = 75.1201923 * B / D */
+	return ((7512UL * bar) / note_divisor) / 100;
+}
 
 static inline void do_capture(int note)
 {
-	/* TESTS */
-/*
-	static int done = 0;
-	int i;
-	if (done) return;
-
-	for (i=0; i<FFT_N; i++) { 
-		capture[i] = 3000.0*sin(((float)(i)/(float)FFT_N * 2.0 * 3.14) * 32.0);
-	}
-
-	done = 1; 
-	return;
-*/
-
 	note_current = note;
 	note_divisor = notes[note].divisor;
 	note_bar = notes[note].bar;
 
 	capture_pos = 0;
 	set_sleep_mode(SLEEP_MODE_ADC);
-	ADCSRA |= (1<<ADSC);
+	ADCSRA |= (1<<ADSC) | (1<<ADATE);
+	sei();
+
 //	while (capture_pos != FFT_N) sleep_mode();
 	while (capture_pos != FFT_N);
+	cli();
 }
 
 static inline void ADCInit(void)
@@ -213,206 +248,278 @@ static inline void ADCInit(void)
 	/* Prescaler = / 128; 16*10^6 / 128 = 125000 */
 	/* Prescaler = / 64; 16*10^6 / 64 = 250000 */
 	/* / 13 cycles -> 19230.769230 Hz */
-	ADCSRA = (1<<ADPS2) | (1<<ADPS1) | (0<<ADPS0) | (1<<ADIE) | (1<<ADATE);
+	ADCSRA = (1<<ADPS2) | (1<<ADPS1) | (1<<ADPS1) | (1<<ADIE) | (1<<ADATE);
 
 	/*
-	 * 000  /2
-	 * 001  /2
-	 * 010  /4
-	 * 011  /8
-	 * 100  /16
-	 * 101  /32
-	 * 110  /64
-	 * 111  /128
+	 * 000  /2    001  /2
+	 * 010  /4    011  /8
+	 * 100  /16   101  /32
+	 * 110  /64   111  /128
 	 */
 
 	ADCSRA |= (1<<ADEN);
 }
 
-static inline void do_analysis(void) 
+/* Method: Calculating frequency */
+
+static num_t estimate_bar(int16_t bar) 
 {
-	const int range_cut = 10;
-	uint16_t max = 0;
-	uint16_t max_pos;
+	int16_t s;
+	int32_t avg_local;
+	uint16_t avg_local_sum;
+	char i;
 
-	uint16_t avg_sum;
+	avg_local = avg_local_sum = 0;
+	for (i=1; i<=7; i++) {
+		s = A.spectrum[bar + i - 4];
+		avg_local += i * s;
+		avg_local_sum += s;
+	}
+	avg_local *= 100;
+	avg_local /= avg_local_sum;
+	avg_local -= 400; /* 0 should be center (max_local_pos) */
+
+	return bar*100 + avg_local;
+}
+
+static char is_good_max(const int16_t bar)
+{
+	/* 1) Pick is bigger than region average */
 	uint32_t avg;
+	char i;
 
-	uint16_t avg_before_sum, avg_after_sum;
-	uint32_t avg_before, avg_after;
+	avg = 0;
+	for (i=1; i<=7; i++) {
+		avg += A.spectrum[bar + i - 4];
+	}
+	avg /= 7;
 
-	int i;
+	if (avg + 5 > A.spectrum[bar])
+		return 0;
+
+	return 1;
+}
+
+static inline void spectrum_analyse(void) 
+{
+	/* Maximas:
+	 * We should see our main freq at 64 bar it's harmonics: 32, 96
+	 * We should see our main freq at note_bar it's harmonics: 
+	 * note_bar-32, note_bar+96
+	 */
+
+	int i, m;
 	uint16_t s;
 
-	avg_before = avg_after = 0;
-	avg_before_sum = avg_after_sum = 0;
-	avg = avg_sum = 0;
-	max = max_pos = 0;
+	B.v.avg_before = B.v.avg_after = 0;
+	B.v.avg_before_sum = B.v.avg_after_sum = 0;
+	B.v.avg = B.v.avg_sum = 0;
+	B.v.max = B.v.max_pos = 0;
 
+	/* "Good sample" definition:
+	 * Avg >= 10
+	 * Max >= 20
+	 *
+	 *
+	 *
+	 */
+	
 	/* Precalculations:
 	 * 1) Calculate global maximum for reference and it's position
-	 * 2) Calculate average value for spektrum 
+	 * 2) Calculate average value for spectrum 
 	 */
-	for (i = range_cut; i < FFT_N / 2 - range_cut; i++) {
+	for (i = spectrum_min; i < spectrum_max; i++) {
 		/* Filter out rubbish */
-		s = (spektrum[i] /= 16);
+		s = (A.spectrum[i] /= 16);
 		
-		if (s < 10) 
+		if (s < 4) 
 			continue;
 
 		/* Avg */
-		avg += s;
-		avg_sum += 1;
+		B.v.avg += s;
+		B.v.avg_sum += 1;
 
 		if (i < note_bar) {
-			avg_before += s;
-			avg_before_sum++;
+			B.v.avg_before += s;
+			B.v.avg_before_sum++;
 		} else {
-			avg_after += s;
-			avg_after_sum++;
+			B.v.avg_after += s;
+			B.v.avg_after_sum++;
 		}
 
 		/* Max */
-		if (s > max) {
-			max = s;
-			max_pos = i;
+		if (s > B.v.max) {
+			B.v.max = s;
+			B.v.max_pos = i;
 		}
 	} 
 
-	if (avg_sum)
-		avg /= avg_sum;
-	else
-		avg = 0;
+	B.v.avg = B.v.avg_sum ? B.v.avg/B.v.avg_sum : 0;
+	B.v.avg_before = B.v.avg_before_sum ? B.v.avg_before/B.v.avg_before_sum : 0;
+	B.v.avg_after_sum = B.v.avg_after_sum ? B.v.avg_after/B.v.avg_after_sum : 0;
 
-	if (avg_before_sum)
-		avg_before /= avg_before_sum;
-	else
-		avg_before = 0;
+	printf_P(PSTR("AVG: %5ld -- %5ld -- %5ld\n"), B.v.avg_before, B.v.avg, B.v.avg_after);
+	printf_P(PSTR("Max=%u at %u (f=%s)\n"), B.v.max, B.v.max_pos, num2str(bar2hz(B.v.max_pos*100)) );
 
-	if (avg_after_sum)
-		avg_after /= avg_after_sum;
-	else
-		avg_after = 0;
 
-	/* Trying to get accurate: 
-	 * 1) Find maximum nearest to our bar 
-	 * 2) Average it's neighborhood
-	 */
-	uint16_t max_local;
-	int16_t max_local_pos;
-	max_local = 0; 
-	max_local_pos = -300;
+	/* Calculate positions of all harmonics */
+	B.v.harm_main_wage = 0;
+	B.v.harm_main = -1;
+	B.v.harm_cnt = 0;
 
-	if (max > 0) {
-		s = spektrum[note_bar];
-		if (s > avg / 2) {
-			max_local = s;
-			max_local_pos = 0;
-		}
-		
-		/* Nearest 'big' bar... */
-		for (i=1; i < 15; i++) {		
-			if (note_bar - i >= range_cut) {
-				s = spektrum[note_bar - i];
-				if (s > avg / 2 && s > max_local) {
-					max_local = s;
-					max_local_pos = note_bar - i;
-				}
-			}
-			
-			if (note_bar + i < FFT_N/2 - range_cut) {
-				s = spektrum[note_bar + i];
-				if (s > avg / 2 && s > max_local) {
-					max_local = s;
-					max_local_pos = note_bar + i;
-				}
-			}
+	B.v.running_avg = 0;
+	B.v.dist_between_max = 0;
+
+
+	for (i = spectrum_min; i<spectrum_max; i++) {
+		s = A.spectrum[i];
+
+		if (B.v.dist_between_max) {
+			B.v.dist_between_max--;
+			goto not_max;
 		}
 
-		printf_P(PSTR("Before update:%d\n"), max_local_pos);
+		if (s <= B.v.running_avg + 2) 
+			goto not_max;
 
-		/* Calculate neighborhood of local maximum! */
-		if (max_local > 0) {
-			uint32_t avg_local;
-			uint16_t avg_local_sum;
-
-			avg_local = avg_local_sum = 0;
-			for (i=1; i<=7; i++) {
-				s = spektrum[max_local_pos + i - 4];
-				avg_local += i * s;
-				avg_local_sum += s;
-			}
-			avg_local *= 10;
-			avg_local /= avg_local_sum;
-			avg_local -= 4; /* 0 should be center (max_local_pos) */
-
-			/* Fix max_local_pos */
-			/* Increase resolution */
-			max_local_pos = max_local_pos * 10;
-			max_local_pos += (uint16_t) avg_local;
-
-			printf_P(PSTR("Approx: %ld absolute new_local_max: %d\n"), avg_local, max_local_pos);
+		for (m=i-4; m <= i+4; m++) {
+			if (s < A.spectrum[m])
+				goto not_max;
 		}
-	}
 
-	/* Make it relative */
-	if (max_local > 0) {
-		max_local_pos -= note_bar * 10;
+		if (s <= B.v.avg/4)
+			goto not_max;
+
+		if (is_good_max(i)) {
+			const num_t real_bar = estimate_bar(i);
+			const num_t freq = bar2hz(real_bar);
+			printf_P(PSTR("MAX=%s "), num2str(real_bar));
+			printf_P(PSTR("FREQ=%s\n"), num2str(freq));
+
+			if (s > B.v.harm_main_wage) {
+				/* Update main harmonic */
+				B.v.harm_main_wage = s;
+				B.v.harm_main = B.v.harm_cnt;
+			}
+
+			B.v.harms[B.v.harm_cnt++] = freq;
+			B.v.harm_wage[B.v.harm_cnt] = s;
+
+			if (B.v.harm_cnt == harm_max)
+				break;
+
+			/* Keep distance between maxes */
+			B.v.dist_between_max = 4;
+		}
+
+	not_max:
+		B.v.running_avg += s;
+		B.v.running_avg /= 2;
 	}
 
 
-	printf_P(PSTR("Before=%5ld Avg=%5ld After=%5ld\n"), avg_before, avg, avg_after);
-	if (max) 
-		printf_P(PSTR("Max=%u at %u "), max, max_pos);
-	if (max_local)
-		printf_P(PSTR("Local Max=%u relative pos=%d\n"), max_local, max_local_pos);
-	putchar('\n');
+	uint32_t harm_avg_dist = 0;
+	for (i=0; i<B.v.harm_cnt-1; i++) {
+		// Average harmonics of the main harmonic 
+		harm_avg_dist += B.v.harms[i+1] - B.v.harms[i];
+	}
+	harm_avg_dist /= B.v.harm_cnt - 1;
+	printf_P(PSTR("Average distance between harmonics: %ld\n"), harm_avg_dist);
 
-	if (max_local > 15) {
-		if (max_local_pos < -15) {
-			printf_P(PSTR("Too low!\n"));
-		} else if (max_local_pos > 15) {
-			printf_P(PSTR("Too high!\n"));
-		} else {
-			printf_P(PSTR("Tuned!\n"));
+//		printf_P(PSTR("(main=%d) harm %d [%ld]: times %d, error: %d\n"), B.v.harm_main, i, B.v.harms[i], B.v.times, B.v.error);		
+}
+
+void spectrum_display(void)
+{
+	uint16_t s;
+	int i, m;
+
+	/* Horizontal spectrum: */
+	for (i = 60; i>0; i-=3) {
+		for (m = spectrum_min; m < spectrum_max; m++) {
+			s = A.spectrum[m];
+			if (s > i)
+				putchar('*');
+			else
+				putchar(' ');
 		}
-	} else if (max > 15) {
-		/* No local maximum, try with global */
-		
-		if (avg_before > avg_after) {
-			printf_P(PSTR("MUCH too low!\n"));
-		} else {
-			printf_P(PSTR("MUCH too high!\n"));
-		}
-	} else {
-		printf_P(PSTR("Strike a string!\n"));
+		putchar('\n');
 	}
 	
+	for (i = spectrum_min; i < spectrum_max; i++)
+		if (i>=100)
+			putchar('1');
+		else 
+			putchar(' ');
+	putchar('\n');
+
+	for (i = spectrum_min; i < spectrum_max; i++) {
+		const char tmp  = (i % 100)/10;
+		putchar(tmp + '0');
+	}
+	putchar('\n');
+
+	for (i = spectrum_min; i < spectrum_max; i++)
+		putchar(i % 10 + '0');
+	putchar('\n');
+
+	putchar('\n');
+
+#if 0
+	for (i = spectrum_min; i < spectrum_max; i++) {
+
+
+
+/*
+  if (i % 3 == 2) {
+  s = (spectrum[i] + spectrum[i-1] + spectrum[i-2]) / 3;
+  printf("\n%3u: %5u  ", i, s);
+  for (m = 0; m < s; m++) putchar('*');
+  }
+
+*/
+
+/*
+  if (i % 2 == 1) {
+  s = (spectrum[i] + spectrum[i-1]) / 2;
+  printf("\n%3u: %5u  ", i, s);
+  for (m = 0; m < s; m++) putchar('*');
+  }
+*/
+
+
+
+/*			printf("\n%3u: %5u  ", i, s);
+			for (m = 0; m < s; m++) putchar('*');
+*/
+	}
+#endif
+
 }
 
 int main(void) __attribute__((naked));
 int main(void)
 {
-	int i, m;
-	uint16_t s;
 	LEDInit();
 	SerialInit();
 
 	ADCInit();
-	printf("Everything initialized\n");
 	sei();
+
+	printf_P(PSTR("Hidden variables size: %d\n"), sizeof(B.v));
 
 	/* Reference counter */
 	TCCR0 = (1<<CS01) | (1<<WGM01); /* /8, CTC - clear timer on match */
-
+	LEDOn(LED_G);
 	for (;;) {
 		/* Wait for buffer to fill up */
-		do_capture(NOTE_D);
+		do_capture(NOTE_E);
 
-		fft_input(capture, bfly_buff); 
-		fft_execute(bfly_buff);
-		fft_output(bfly_buff, spektrum);
 
+		fft_input(A.capture, B.bfly_buff); 
+		fft_execute(B.bfly_buff);
+		fft_output(B.bfly_buff, A.spectrum);
+		LEDOff(LED_G);
 
 /*		printf("Captured:\n");
 		for (i = 0; i < FFT_N ; i++) {
@@ -425,34 +532,9 @@ int main(void)
 		putchar('\n');
 */
 
-		printf("\nNote=%d Bar=%d\n", note_current, note_bar);
-		do_analysis();
-
-		for (i = 10; i < FFT_N / 2 - 5; i++) {
-
-			if (i % 3 == 2) {
-				s = (spektrum[i] + spektrum[i-1] + spektrum[i-2]) / 3;
-				printf("\n%3u: %5u  ", i, s);
-				for (m = 0; m < s; m++) putchar('*');
-			}
-
-
-
-/*
-			if (i % 2 == 1) {
-				s = (spektrum[i] + spektrum[i-1]) / 2;
-				printf("\n%3u: %5u  ", i, s);
-				for (m = 0; m < s; m++) putchar('*');
-			}
-*/
-
-
-
-/*			printf("\n%3u: %5u  ", i, s);
-			for (m = 0; m < s; m++) putchar('*');
-*/
-		}
-
+		printf_P(PSTR("\nNote=%d Bar=%d\n"), note_current, note_bar);
+		spectrum_analyse();
+		spectrum_display();
 
 
 
