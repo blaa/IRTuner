@@ -22,11 +22,6 @@ static int Serial_putchar(char c, FILE *Stream)
 	return 0;
 }
 
-static inline put_serial(const char *str)
-{
-	
-}
-
 /*
 static int Serial_getchar(FILE *Stream)
 {

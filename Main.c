@@ -65,9 +65,9 @@ union {
 
 complex_t bfly_buff[FFT_N];   /* 1024 bytes */
 
-static volatile int capture_pos;               /* Position in buffer            */
-static volatile int16_t adc_cur;               /* Current measurement           */
-static volatile int16_t background;            /* Estimated Light background    */
+volatile int capture_pos;               /* Position in buffer            */
+volatile int16_t adc_cur;               /* Current measurement           */
+volatile int16_t background;            /* Estimated Light background    */
 
 /* Note to chase */
 volatile struct {
@@ -83,7 +83,6 @@ ISR(ADC_vect)
 
 	/* Read measurement. It will get averaged */
 	tmp = ADC - 512;
-
 	/* Calculate background all the time */
 	background *= 7;
 	background += tmp;
@@ -101,6 +100,8 @@ ISR(ADC_vect)
 	if (capture_pos >= FFT_N)
 		return;
 
+
+	LEDSwitch(LED_G);
 	/* Multiply to better fit FFT */
 	adc_cur *= 500;
 
@@ -337,7 +338,7 @@ inline void spectrum_analyse(void)
 		if (is_good_max(i)) {
 			const num_t real_bar = estimate_bar(i);
 			const num_t freq = bar2hz(real_bar);
-			printf(_("Loc_simp=%d MAX_realpos=%s\n"), i, num2str(real_bar));
+			printf(_("Loc_simp=%d MAX_realpos=%s"), i, num2str(real_bar));
 			printf(_("FREQ=%s\n"), num2str(freq));
 
 			if (s > var(harm_main_wage)) {
@@ -404,7 +405,7 @@ void spectrum_display(void)
 }
 
 
-static inline void memtest(void)
+void memtest(void)
 {
 	int i;
 	for (i=0; i<FFT_N; i++) {
@@ -420,7 +421,6 @@ static inline void memtest(void)
 	LEDOn(LED_G);
 }
 
-int main(void) __attribute__((naked));
 int main(void)
 {
 	LEDInit();
@@ -431,15 +431,11 @@ int main(void)
 
 	/* Reference counter */
 	// TCCR0 = (1<<CS01) | (1<<WGM01); /* /8, CTC - clear timer on match */
-	puts(_("Init"));
+	printf(_("Init"));
 	
-	const char *str = "Captured@";
 	for (;;) {
 		/* Wait for buffer to fill up */
-
-		do_capture(NOTE_A);
-		puts(str);
-
+		do_capture(NOTE_E);
 
 		fft_input(buff(capture), bfly_buff); 
 		fft_execute(bfly_buff);
@@ -448,8 +444,6 @@ int main(void)
 		printf(_("\nNote=%d Bar=%d Divisor=%d\n"), note.current, note.bar, note.divisor);
 		spectrum_analyse();
 		spectrum_display();
-		if (str[0] == '\0')
-			LEDSwitch(LED_G);
 	}
 	return 0;
 }
