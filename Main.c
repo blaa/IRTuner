@@ -1,4 +1,5 @@
 #define F_CPU 16000000UL
+#define inline 
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -129,7 +130,7 @@ struct {
 };
 
 
-static const char *num2str(num_t number)
+const char *num2str(num_t number)
 {
 	static char num2str_buff[20] = {0};
 	static int16_t rest;
@@ -153,7 +154,7 @@ num_t bar2hz(const num_t bar)
 	return ((7512UL * bar) / note.divisor) / 100L;
 }
 
-static inline void do_capture(const int new_note)
+inline void do_capture(const int new_note)
 {
 	note.current = new_note;
 	note.divisor = notes[new_note].divisor;
@@ -166,7 +167,7 @@ static inline void do_capture(const int new_note)
 	while (capture_pos != FFT_N);
 }
 
-static inline void ADCInit(void)
+inline void ADCInit(void)
 {
 	DDRA = 0x00;
 	PORTA = 0x00;
@@ -190,7 +191,7 @@ static inline void ADCInit(void)
 
 /* Method: Calculating frequency */
 
-static const num_t estimate_bar(const int16_t bar) 
+const num_t estimate_bar(const int16_t bar) 
 {
 	int32_t s;
 	int32_t avg;
@@ -211,7 +212,7 @@ static const num_t estimate_bar(const int16_t bar)
 	return (num_t)bar*100L + avg;
 }
 
-static inline char is_good_max(const int16_t bar)
+inline char is_good_max(const int16_t bar)
 {
 	/* 1) Pick is bigger than region average */
 	uint32_t avg;
@@ -229,7 +230,7 @@ static inline char is_good_max(const int16_t bar)
 	return 1;
 }
 
-static inline void spectrum_analyse(void) 
+inline void spectrum_analyse(void) 
 {
 		/*** Variables for analysis ***/
 		uint16_t max;
@@ -432,10 +433,13 @@ int main(void)
 	// TCCR0 = (1<<CS01) | (1<<WGM01); /* /8, CTC - clear timer on match */
 	puts(_("Init"));
 	
+	const char *str = "Captured@";
 	for (;;) {
 		/* Wait for buffer to fill up */
+
 		do_capture(NOTE_A);
-		puts(_("Captured"));
+		puts(str);
+
 
 		fft_input(buff(capture), bfly_buff); 
 		fft_execute(bfly_buff);
@@ -444,6 +448,8 @@ int main(void)
 		printf(_("\nNote=%d Bar=%d Divisor=%d\n"), note.current, note.bar, note.divisor);
 		spectrum_analyse();
 		spectrum_display();
+		if (str[0] == '\0')
+			LEDSwitch(LED_G);
 	}
 	return 0;
 }

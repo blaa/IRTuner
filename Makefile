@@ -4,7 +4,7 @@ LDFLAGS=-Wl,-gc-sections
 #-Wl,-u,vfprintf -lprintf_min
 
 #OPT=-Os
-CFLAGS=-I/usr/avr/include -pipe -fwhole-program -mmcu=atmega644 $(OPT) $(LDFLAGS) -Wall -Winline $(INLINE)
+CFLAGS=-I/usr/avr/include -pipe -mmcu=atmega644 $(OPT) $(LDFLAGS) -Wall -Winline $(INLINE)
 CC=avr-gcc
 UISP=uisp
 

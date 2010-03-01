@@ -10,9 +10,21 @@ static FILE Serial_stdout;
 
 static int Serial_putchar(char c, FILE *Stream)
 {
+	if (c == '@')
+		LEDOn(LED_G);
+
 	while ( !(UCSR0A & (1<<UDRE0)) );
 	UDR0 = c;
+
+	if (c == '@')
+		LEDOff(LED_G);
+
 	return 0;
+}
+
+static inline put_serial(const char *str)
+{
+	
 }
 
 /*
