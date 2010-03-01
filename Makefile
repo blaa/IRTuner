@@ -4,7 +4,7 @@ LDFLAGS=-Wl,-gc-sections
 #-Wl,-u,vfprintf -lprintf_min
 
 #OPT=-Os
-CFLAGS=-I/usr/avr/include -pipe -fwhole-program -mmcu=atmega32 $(OPT) $(LDFLAGS) -Wall -Winline $(INLINE)
+CFLAGS=-I/usr/avr/include -pipe -fwhole-program -mmcu=atmega644 $(OPT) $(LDFLAGS) -Wall -Winline $(INLINE)
 CC=avr-gcc
 UISP=uisp
 
@@ -20,14 +20,14 @@ Main: Main.c Serial.c FFT/ffft.S
 
 Send: Main
 	# $(UISP) -dlpt=/dev/parport0 --segment=flash --erase -dprog=dapa --upload if=Main.hex -dpart=atmega32 --verify
-	# avrdude -c usbasp -p m32 -U flash:w:./Main.hex:i   -v 
-	avrdude -c usbasp -p m32 -U flash:w:./Main.hex:i   -v -F
+	# avrdude -c usbasp -p m644 -U flash:w:./Main.hex:i   -v 
+	avrdude -c usbasp -p m644 -U flash:w:./Main.hex:i   -v
 
 SendN: Main
-	$(UISP) -dlpt=/dev/parport0 --segment=flash --erase -dprog=dapa --upload if=Main.hex -dpart=atmega32 
+	$(UISP) -dlpt=/dev/parport0 --segment=flash --erase -dprog=dapa --upload if=Main.hex -dpart=atmega64 
 
 Fuses:
-	$(UISP) -dlpt=/dev/parport0 -dprog=dapa --rd_fuses -dpart=atmega32 
+	$(UISP) -dlpt=/dev/parport0 -dprog=dapa --rd_fuses -dpart=atmega64 
 
 EEPROM:
 	$(UISP) -dlpt=0x378 -dprog=dapa --segment=eeprom --download of=EEPROM.srec -dpart=atmega32 

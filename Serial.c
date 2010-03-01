@@ -4,46 +4,45 @@
  *
  * stdio driven hardware UART for debugging.
  ********************/
-#include <stdio.h>
-
 const uint16_t UART_BAUDRATE = 16; /* 115200 */
 
 static FILE Serial_stdout;
+
 static int Serial_putchar(char c, FILE *Stream)
 {
-	while ( !(UCSRA & (1<<UDRE)) );
-	UDR = c;
+	while ( !(UCSR0A & (1<<UDRE0)) );
+	UDR0 = c;
 	return 0;
 }
 
+/*
 static int Serial_getchar(FILE *Stream)
 {
-//	while ( !(UCSR0A & (1<<RXC0)) ); /* Use for blocking I/O */
 	if (!(UCSRA & (1<<RXC)))
 		return -1;
 	return UDR;
 }
+*/
 
 static inline void SerialInit(void)
 {
 	/* Set baudrate */
-	UBRRH = (unsigned char)(UART_BAUDRATE>>8);
-	UBRRL = (unsigned char)UART_BAUDRATE;
+	UBRR0H = (unsigned char)(UART_BAUDRATE>>8);
+	UBRR0L = (unsigned char)UART_BAUDRATE;
 
 	/* Double asynchronous UART speed */
-	UCSRA = (1<<U2X);
+	UCSR0A = (1<<U2X0);
 
 	/* Enable receiver and transmitter */
-	UCSRB = (1<<RXEN) | (1<<TXEN);
+	UCSR0B = (1<<RXEN0) | (1<<TXEN0);
 
 	/* even parity, 8 bits of data, 1 stop bits */
-	UCSRC = (1<<URSEL) | (0<<USBS) | (1<<UCSZ0) | (1<<UCSZ1) | (1<<UPM1);
+	UCSR0C = /*(1<<URSEL0) | */(0<<USBS0) | (1<<UCSZ00) | (1<<UCSZ01) | (1<<UPM01);
 
 	DDRD |= (1<<PD1);
 	PORTD |= (1<<PD1);
 
-	fdev_setup_stream(&Serial_stdout, Serial_putchar, Serial_getchar, _FDEV_SETUP_RW);
+	fdev_setup_stream(&Serial_stdout, Serial_putchar, NULL, _FDEV_SETUP_RW);
 	stdout = &Serial_stdout;
-	stdin = &Serial_stdout;
 }
 

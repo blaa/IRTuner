@@ -1,7 +1,8 @@
 #define F_CPU 16000000UL
-// #define inline inline __attribute__((always_inline))
 
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include <inttypes.h>
 
 #include <avr/io.h>
@@ -41,8 +42,13 @@
 
 #include "FFT/ffft.h"
 
+/* Strings */
+#define _(x) x
+#define printf printf
+
 /* FFT Buffers and data*/
 #define var(x) x
+#define buff(x) BUFF.x
 
 /* num_t has 2 decimal places. */
 typedef int32_t num_t;
@@ -51,13 +57,12 @@ const char spectrum_min = 10;
 const char spectrum_max = FFT_N/2 - 10;
 const int harm_max = 15;
 
-int16_t capture[FFT_N];      /* 512 bytes */
-uint16_t spectrum[FFT_N/2];  /* 256 bytes */
-
+union {
+	int16_t capture[FFT_N];      /* 256 bytes */
+	uint16_t spectrum[FFT_N/2];  /* 128 bytes */
+} BUFF;
 
 complex_t bfly_buff[FFT_N];   /* 1024 bytes */
-
-
 
 static volatile int capture_pos;               /* Position in buffer            */
 static volatile int16_t adc_cur;               /* Current measurement           */
@@ -99,7 +104,7 @@ ISR(ADC_vect)
 	adc_cur *= 500;
 
 	/* Store */
-	capture[capture_pos] = adc_cur;
+	buff(capture)[capture_pos] = adc_cur;
 	++capture_pos;
 }
 
@@ -123,13 +128,19 @@ struct {
 	{7, 31, 32962U}, 
 };
 
-const char *num2str(num_t number)
+
+static const char *num2str(num_t number)
 {
-	static char num2str_buff[20];
+	static char num2str_buff[20] = {0};
 	static int16_t rest;
 	rest = number % 100;
 	if (rest < 0) rest = -rest;
-	sprintf_P(num2str_buff, PSTR("%ld.%02d"), (int32_t)(number / 100L), rest);
+
+	itoa((int16_t)(number/100L), num2str_buff, 10);
+	const int pos = strlen(num2str_buff);
+	num2str_buff[pos] = '.';
+	itoa(rest, num2str_buff+pos+1, 10);	
+
 	return num2str_buff;
 }
 
@@ -150,11 +161,8 @@ static inline void do_capture(const int new_note)
 
 	capture_pos = 0;
 
-	
-
-
-//	set_sleep_mode(SLEEP_MODE_ADC);
-//	while (capture_pos != FFT_N) sleep_mode();
+  //	set_sleep_mode(SLEEP_MODE_ADC);
+  //	while (capture_pos != FFT_N) sleep_mode();
 	while (capture_pos != FFT_N);
 }
 
@@ -182,27 +190,28 @@ static inline void ADCInit(void)
 
 /* Method: Calculating frequency */
 
-static num_t estimate_bar(int16_t bar) 
+static const num_t estimate_bar(const int16_t bar) 
 {
-	int16_t s;
-	int32_t avg_local;
-	uint16_t avg_local_sum;
-	char i;
-
-	avg_local = avg_local_sum = 0;
+	int32_t s;
+	int32_t avg;
+	int32_t avg_sum;
+	int i;
+	LEDOn(LED_R);
+	avg = avg_sum = 0;
 	for (i=1; i<=7; i++) {
-		s = spectrum[bar + i - 4];
-		avg_local += i * s;
-		avg_local_sum += s;
+		s = buff(spectrum)[bar + i - 4];
+		avg += i * s;
+		avg_sum += s;
 	}
-	avg_local *= 100;
-	avg_local /= avg_local_sum;
-	avg_local -= 400; /* 0 should be center (max_local_pos) */
+	avg *= 100;
+	avg /= avg_sum;
+	avg -= 400; /* 0 should be center (max_local_pos) */
 
-	return bar*100 + avg_local;
+	LEDOff(LED_R);
+	return (num_t)bar*100L + avg;
 }
 
-static char is_good_max(const int16_t bar)
+static inline char is_good_max(const int16_t bar)
 {
 	/* 1) Pick is bigger than region average */
 	uint32_t avg;
@@ -210,11 +219,11 @@ static char is_good_max(const int16_t bar)
 
 	avg = 0;
 	for (i=1; i<=7; i++) {
-		avg += spectrum[bar + i - 4];
+		avg += buff(spectrum)[bar + i - 4];
 	}
 	avg /= 7;
 
-	if (avg + 5 > spectrum[bar])
+	if (avg + 5 > buff(spectrum)[bar])
 		return 0;
 
 	return 1;
@@ -264,7 +273,7 @@ static inline void spectrum_analyse(void)
 	 */
 	for (i = spectrum_min; i < spectrum_max; i++) {
 		/* Filter out rubbish */
-		s = (spectrum[i] /= 16);
+		s = (buff(spectrum)[i] /= 16);
 		
 		if (s < 4) 
 			continue;
@@ -293,10 +302,10 @@ static inline void spectrum_analyse(void)
 	var(avg_before) = var(avg_before_sum) ? var(avg_before)/var(avg_before_sum) : 0;
 	var(avg_after_sum) = var(avg_after_sum) ? var(avg_after)/var(avg_after_sum) : 0;
 
-/*
-	printf_P(PSTR("AVG: %5ld -- %5ld -- %5ld\n"), var(avg_before), var(avg), var(avg_after));
-	printf_P(PSTR("Max=%u at %u (f=%s)\n"), var(max), var(max_pos), num2str(bar2hz(var(max_pos)*100)) );
-*/
+
+	printf(_("AVG: %5ld -- %5ld -- %5ld\n"), var(avg_before), var(avg), var(avg_after));
+	printf(_("Max=%u at %u (f=%s)\n"), var(max), var(max_pos), num2str(bar2hz(var(max_pos)*100)) );
+
 	/* Calculate positions of all harmonics */
 	var(harm_main_wage) = 0;
 	var(harm_main) = -1;
@@ -306,7 +315,7 @@ static inline void spectrum_analyse(void)
 	var(dist_between_max) = 0;
 
 	for (i = spectrum_min; i<spectrum_max; i++) {
-		s = spectrum[i];
+		s = buff(spectrum)[i];
 
 		if (var(dist_between_max)) {
 			var(dist_between_max)--;
@@ -317,7 +326,7 @@ static inline void spectrum_analyse(void)
 			goto not_max;
 
 		for (m=i-4; m <= i+4; m++) {
-			if (s < spectrum[m])
+			if (s < buff(spectrum)[m])
 				goto not_max;
 		}
 
@@ -327,8 +336,8 @@ static inline void spectrum_analyse(void)
 		if (is_good_max(i)) {
 			const num_t real_bar = estimate_bar(i);
 			const num_t freq = bar2hz(real_bar);
-			printf_P(PSTR("MAX=%s "), num2str(real_bar));
-			printf_P(PSTR("FREQ=%s\n"), num2str(freq));
+			printf(_("Loc_simp=%d MAX_realpos=%s\n"), i, num2str(real_bar));
+			printf(_("FREQ=%s\n"), num2str(freq));
 
 			if (s > var(harm_main_wage)) {
 				/* Update main harmonic */
@@ -344,7 +353,6 @@ static inline void spectrum_analyse(void)
 
 			/* Keep distance between maxes */
 			var(dist_between_max) = 4;
-
 		}
 
 	not_max:
@@ -364,7 +372,7 @@ void spectrum_display(void)
 	/* Horizontal spectrum: */
 	for (i = 60; i>0; i-=3) {
 		for (m = spectrum_min; m < spectrum_max; m++) {
-			s = spectrum[m];
+			s = buff(spectrum)[m];
 			if (s > i)
 				putchar('*');
 			else
@@ -399,11 +407,11 @@ static inline void memtest(void)
 {
 	int i;
 	for (i=0; i<FFT_N; i++) {
-		capture[i] = i;
+		buff(capture)[i] = i;
 	}
 	for (i=0; i<FFT_N; i++) {
-		if (capture[i] != i) {
-			printf_P(PSTR("DUPA at %d\n"), i);
+		if (buff(capture)[i] != i) {
+			printf(_("DUPA at %d\n"), i);
 			LEDOn(LED_R);
 			return;
 		}
@@ -422,17 +430,18 @@ int main(void)
 
 	/* Reference counter */
 	// TCCR0 = (1<<CS01) | (1<<WGM01); /* /8, CTC - clear timer on match */
-	puts_P(PSTR("Init"));
+	puts(_("Init"));
+	
 	for (;;) {
 		/* Wait for buffer to fill up */
 		do_capture(NOTE_A);
-		puts_P(PSTR("Captured"));
+		puts(_("Captured"));
 
-		fft_input(capture, bfly_buff); 
+		fft_input(buff(capture), bfly_buff); 
 		fft_execute(bfly_buff);
-		fft_output(bfly_buff, spectrum);
+		fft_output(bfly_buff, buff(spectrum));
 
-		printf_P(PSTR("\nNote=%d Bar=%d Divisor=%d\n"), note.current, note.bar, note.divisor);
+		printf(_("\nNote=%d Bar=%d Divisor=%d\n"), note.current, note.bar, note.divisor);
 		spectrum_analyse();
 		spectrum_display();
 	}
