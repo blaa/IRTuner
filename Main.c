@@ -10,10 +10,21 @@
 #include <avr/interrupt.h>
 #include <avr/sleep.h>
 #include <avr/pgmspace.h>
+#include <util/delay.h>
 
 /*** Local includes ***/
 #include "LED.c"
 #include "Serial.c"
+
+static void error(void)
+{
+	int i;
+	for (;;) {
+		LEDSwitch(LED_R);
+		for (i=0; i<20; i++) 
+			_delay_ms(20);
+	}
+}
 
 /************************************************************************************************************
  * Guitar tunner - NOTES
@@ -49,7 +60,7 @@
 
 /* FFT Buffers and data*/
 #define var(x) x
-#define buff(x) BUFF.x
+#define v(x) BUFF.x
 
 /* num_t has 2 decimal places. */
 typedef int32_t num_t;
@@ -58,14 +69,19 @@ const char spectrum_min = 10;
 const char spectrum_max = FFT_N/2 - 10;
 const int harm_max = 15;
 
+uint16_t spectrum[FFT_N/2];  /* 128 bytes */
+
 union {
-	int16_t capture[FFT_N];      /* 256 bytes */
-	uint16_t spectrum[FFT_N/2];  /* 128 bytes */
-} BUFF;
+	complex_t fft_buff[FFT_N];   /* 1024 bytes */
+} v;
 
-complex_t bfly_buff[FFT_N];   /* 1024 bytes */
 
-volatile int capture_pos;               /* Position in buffer            */
+/* Buffer traversing for ADC interrupt */
+volatile const prog_int16_t *window_cur = tbl_window;
+const complex_t *fft_buff_end = &v.fft_buff[FFT_N];
+volatile complex_t * volatile fft_buff_cur = &v.fft_buff[FFT_N];
+
+
 volatile int16_t adc_cur;               /* Current measurement           */
 volatile int16_t background;            /* Estimated Light background    */
 
@@ -79,13 +95,12 @@ volatile struct {
 ISR(ADC_vect) 
 {
 	static char i;
-	static int16_t tmp;
 
 	/* Read measurement. It will get averaged */
-	tmp = ADC - 512;
+	adc_cur = ADC - 512;
 	/* Calculate background all the time */
 	background *= 7;
-	background += tmp;
+	background += adc_cur;
 	background /= 8;
 
 	/* Increment divisor, return if too small */
@@ -94,20 +109,22 @@ ISR(ADC_vect)
 	}
 
   	/* Average all measurements into one */
-	adc_cur = tmp - background;
+	adc_cur -= background;
 
 	/* Ignore saving if buffer is full */
-	if (capture_pos >= FFT_N)
+
+	if (fft_buff_cur == fft_buff_end)
 		return;
 
-
-	LEDSwitch(LED_G);
 	/* Multiply to better fit FFT */
 	adc_cur *= 500;
 
 	/* Store */
-	buff(capture)[capture_pos] = adc_cur;
-	++capture_pos;
+	const int16_t tmp = fmuls_f(adc_cur, pgm_read_word_near(window_cur));
+	fft_buff_cur->r = fft_buff_cur->i = tmp;
+	
+	fft_buff_cur++;
+	window_cur++;
 }
 
 enum { NOTE_E2 = 0, NOTE_A, NOTE_D, NOTE_G, NOTE_H, NOTE_E }; 
@@ -160,12 +177,13 @@ inline void do_capture(const int new_note)
 	note.current = new_note;
 	note.divisor = notes[new_note].divisor;
 	note.bar = notes[new_note].bar;
-
-	capture_pos = 0;
+	
+	window_cur = tbl_window;
+	fft_buff_cur = v.fft_buff;
 
   //	set_sleep_mode(SLEEP_MODE_ADC);
   //	while (capture_pos != FFT_N) sleep_mode();
-	while (capture_pos != FFT_N);
+	while (fft_buff_cur != fft_buff_end);
 }
 
 inline void ADCInit(void)
@@ -201,7 +219,7 @@ const num_t estimate_bar(const int16_t bar)
 	LEDOn(LED_R);
 	avg = avg_sum = 0;
 	for (i=1; i<=7; i++) {
-		s = buff(spectrum)[bar + i - 4];
+		s = spectrum[bar + i - 4];
 		avg += i * s;
 		avg_sum += s;
 	}
@@ -221,11 +239,11 @@ inline char is_good_max(const int16_t bar)
 
 	avg = 0;
 	for (i=1; i<=7; i++) {
-		avg += buff(spectrum)[bar + i - 4];
+		avg += spectrum[bar + i - 4];
 	}
 	avg /= 7;
 
-	if (avg + 5 > buff(spectrum)[bar])
+	if (avg + 5 > spectrum[bar])
 		return 0;
 
 	return 1;
@@ -275,7 +293,7 @@ inline void spectrum_analyse(void)
 	 */
 	for (i = spectrum_min; i < spectrum_max; i++) {
 		/* Filter out rubbish */
-		s = (buff(spectrum)[i] /= 16);
+		s = (spectrum[i] /= 16);
 		
 		if (s < 4) 
 			continue;
@@ -317,7 +335,7 @@ inline void spectrum_analyse(void)
 	var(dist_between_max) = 0;
 
 	for (i = spectrum_min; i<spectrum_max; i++) {
-		s = buff(spectrum)[i];
+		s = spectrum[i];
 
 		if (var(dist_between_max)) {
 			var(dist_between_max)--;
@@ -328,7 +346,7 @@ inline void spectrum_analyse(void)
 			goto not_max;
 
 		for (m=i-4; m <= i+4; m++) {
-			if (s < buff(spectrum)[m])
+			if (s < spectrum[m])
 				goto not_max;
 		}
 
@@ -338,7 +356,7 @@ inline void spectrum_analyse(void)
 		if (is_good_max(i)) {
 			const num_t real_bar = estimate_bar(i);
 			const num_t freq = bar2hz(real_bar);
-			printf(_("Loc_simp=%d MAX_realpos=%s"), i, num2str(real_bar));
+			printf(_("Loc_simp=%d MAX_realpos=%s "), i, num2str(real_bar));
 			printf(_("FREQ=%s\n"), num2str(freq));
 
 			if (s > var(harm_main_wage)) {
@@ -374,7 +392,7 @@ void spectrum_display(void)
 	/* Horizontal spectrum: */
 	for (i = 60; i>0; i-=3) {
 		for (m = spectrum_min; m < spectrum_max; m++) {
-			s = buff(spectrum)[m];
+			s = spectrum[m];
 			if (s > i)
 				putchar('*');
 			else
@@ -404,26 +422,15 @@ void spectrum_display(void)
 
 }
 
-
-void memtest(void)
+void self_test(void)
 {
-	int i;
-	for (i=0; i<FFT_N; i++) {
-		buff(capture)[i] = i;
-	}
-	for (i=0; i<FFT_N; i++) {
-		if (buff(capture)[i] != i) {
-			printf(_("DUPA at %d\n"), i);
-			LEDOn(LED_R);
-			return;
-		}
-	}
-	LEDOn(LED_G);
 }
 
 int main(void)
 {
 	LEDInit();
+	LEDOn(LED_R);
+
 	SerialInit();
 
 	ADCInit();
@@ -431,15 +438,16 @@ int main(void)
 
 	/* Reference counter */
 	// TCCR0 = (1<<CS01) | (1<<WGM01); /* /8, CTC - clear timer on match */
-	printf(_("Init"));
-	
+
+	printf("Init\n");
+	LEDOff(LED_R);
 	for (;;) {
 		/* Wait for buffer to fill up */
-		do_capture(NOTE_E);
+		do_capture(NOTE_E2);
 
-		fft_input(buff(capture), bfly_buff); 
-		fft_execute(bfly_buff);
-		fft_output(bfly_buff, buff(spectrum));
+//		fft_input(buff(capture), v.fft_buff); 
+		fft_execute(v.fft_buff);
+		fft_output(v.fft_buff, spectrum);
 
 		printf(_("\nNote=%d Bar=%d Divisor=%d\n"), note.current, note.bar, note.divisor);
 		spectrum_analyse();

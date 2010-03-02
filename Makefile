@@ -26,6 +26,9 @@ Send: Main
 SendN: Main
 	$(UISP) -dlpt=/dev/parport0 --segment=flash --erase -dprog=dapa --upload if=Main.hex -dpart=atmega64 
 
+Memory: Main
+	avr-objdump -h Main
+
 Fuses:
 	$(UISP) -dlpt=/dev/parport0 -dprog=dapa --rd_fuses -dpart=atmega64 
 
