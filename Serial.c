@@ -10,15 +10,8 @@ static FILE Serial_stdout;
 
 static int Serial_putchar(char c, FILE *Stream)
 {
-	if (c == '@')
-		LEDOn(LED_G);
-
 	while ( !(UCSRA & (1<<UDRE)) );
 	UDR = c;
-
-	if (c == '@')
-		LEDOff(LED_G);
-
 	return 0;
 }
 

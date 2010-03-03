@@ -15,20 +15,19 @@
 /*** Local includes ***/
 #include "Sleep.c"
 #include "LCD.c"
-#include "LED.c"
 #include "Serial.c"
 
 static void error(void)
 {
-	static int i;  
+	static int i;
 	static int cnt;
-	LEDOff(LED_RGB);
 	cnt = 5;
-	do {
-		LEDSwitch(LED_R);
-		for (i=0; i<20; i++)
-			_delay_ms(20);
-	} while (--cnt);
+	lcd_clear();
+
+	lcd_print("ERROR\nVery bad.");
+
+	for (i=0; i<3; i++)
+		_delay_ms(20);
 }
 
 /************************************************************************************************************
@@ -55,6 +54,27 @@ static void error(void)
  * B = 0.026624 f D
  *
  *
+ *  Measurements for data:
+	// f=82.407 presc=128 div=29 bar=32 err=0.48425 scale=64 
+	{29, 8240U, 3},
+	// f=110.000 presc=128 div=22 bar=32 err=0.73427 scale=64 
+	{22, 11000U, 3},
+	// f=146.832 presc=128 div=16 bar=31 err=1.28663 scale=64 
+	{16, 14683U, 5},
+	// f=195.998 presc=128 div=12 bar=31 err=1.93750 scale=64 
+	{12, 19599U, 7},
+	// f=246.942 presc=128 div=10 bar=33 err=0.95463 scale=64 
+	{10, 24694U, 8},
+	// f=329.628 presc=128 div=7 bar=31 err=3.04714 scale=64  
+	{7, 32962U, 10},
+
+ * NOTE    Difference
+ * E2.        OK
+ * A.        116.94 ~ +7Hz
+ * D.         OK
+ * G         198.6  ~ +4
+ * B         253.7  ~ +7
+ * E         324    ~ -5
  */
 
 #include "FFT/ffft.h"
@@ -93,21 +113,22 @@ union {
 		uint16_t running_avg;
 		char dist_between_max;
 
-
 		/* Number of harmonics found */
 		int harm_cnt;
 
 		/* Index of the one with biggest wage + it's wage */
-		int harm_main; 
+		int harm_main;
 		uint16_t harm_main_wage;
 
 		/* Harmonics found + their wages */
-		num_t harms[4];
+		num_t harm_freq[4];
+		int16_t harm_bar[4];
 		uint16_t harm_wage[4];
 
 		/* Averaging correct frequency */
 		num_t avg_freq;
 
+		char lcd_buff[20];
 	} vars;
 } v;
 
@@ -122,7 +143,7 @@ volatile complex_t * volatile fft_buff_cur = &v.fft_buff[FFT_N];
 
 /* Resulting frequency is averaged further */
 num_t avg_freq_running;
-		
+
 /* And ignored after some time of no measurements */
 uint16_t avg_freq_running_time;
 
@@ -132,7 +153,7 @@ volatile uint16_t tick;
 
 /*** NOTE data ***/
 
-/* Current selected note (divisor is required 
+/* Current selected note (divisor is required
  * for gathering windowed data) */
 volatile struct {
 	char current;
@@ -160,6 +181,37 @@ struct {
 	/* f=329.628 presc=128 div=7 bar=31 err=3.04714 scale=64  */
 	{7, 32962U, 10},
 };
+
+void lcd_update(void)
+{
+	/* First line - accuracy of current measurement */
+
+	/* Second: X ABC.DE - frequency + Current note */
+	lcd_clear();
+
+	lcd_print("line\n");
+
+/*
+	static char num2str_buff[20] = {0};
+	static int16_t rest;
+	rest = number % 100;
+	if (rest < 0) rest = -rest;
+
+	itoa((int16_t)(number/100L), num2str_buff, 10);
+	const int pos = strlen(num2str_buff);
+	num2str_buff[pos] = '.';
+	itoa(rest, num2str_buff+pos+1, 10);
+
+	return num2str_buff;
+
+
+	sprintf(v(lcd_buff), "
+*/
+
+
+}
+
+
 
 /* Initialize data for capture, select tone */
 static inline void do_capture(const int new_note)
@@ -239,7 +291,7 @@ static const char *num2str(num_t number)
 
 #define int2num(x) (100L*x)
 
-/* Convert accurate bar position (two decimal places) 
+/* Convert accurate bar position (two decimal places)
  * into frequency according to current note divisor */
 static num_t bar2hz(const num_t bar)
 {
@@ -267,7 +319,7 @@ static num_t estimate_bar(const int16_t bar)
 	avg -= 400;
 	avg_sum /= 7; /* Calculate neighborhood average */
 
-	if (avg_sum + 5 > spectrum[bar]) 
+	if (avg_sum + 5 > spectrum[bar])
 		return 0;
 	else
 		return (num_t)bar*100L + avg;
@@ -342,8 +394,11 @@ static inline void spectrum_analyse(void)
 				v(harm_main) = v(harm_cnt);
 			}
 
-			v(harms)[v(harm_cnt)++] = freq;
+			v(harm_freq)[v(harm_cnt)] = freq;
+			v(harm_bar)[v(harm_cnt)] = i;
 			v(harm_wage)[v(harm_cnt)] = s;
+
+			v(harm_cnt)++;
 
 			if (v(harm_cnt) == harm_max)
 				break;
@@ -361,15 +416,39 @@ static inline void spectrum_analyse(void)
 	if (avg_freq_running_time)
 		avg_freq_running_time--;
 
-	/* Ignore if there're no 3 harmonics visible */
-	if (v(harm_cnt) != 3)
-		return;
+	/* if there're 3 harmonics visible */
+	switch (v(harm_cnt)) {
+	case 3:
+		/* Do the average of all of them treating them sequentially */
+		v(avg_freq) = v(harm_freq)[1];
+		v(avg_freq) += v(harm_freq)[0] * 2;
+		v(avg_freq) += v(harm_freq)[2] * 2 / 3;
+		v(avg_freq) /= 3;
+		break;
 
-	/* Do the average of all of them */
-	v(avg_freq) = v(harms)[1];
-	v(avg_freq) += v(harms)[0] * 2;
-	v(avg_freq) += v(harms)[2] * 2 / 3;
-	v(avg_freq) /= 3;
+	case 2:
+		if (v(harm_bar)[0] < 25) {
+			v(avg_freq) = v(harm_freq)[0] * 2;
+			if (v(harm_bar)[1] < 38)
+				v(avg_freq) += v(harm_freq)[1];
+			else
+				v(avg_freq) += v(harm_freq)[1] * 2 / 3;
+		} else if (v(harm_bar)[0] < 38) {
+			v(avg_freq) = v(harm_freq)[0];
+			v(avg_freq) += v(harm_freq)[1] * 2 / 3;
+		} else {
+			/* Ok, something is wrong! */
+			printf("ERR:Something wrong (%d)\n", v(harm_bar)[0]);
+			return;
+		}
+
+		v(avg_freq) /= 2;
+		break;
+	default:
+		return;
+	}
+
+
 
 	if (avg_freq_running_time) {
 		avg_freq_running += v(avg_freq);
@@ -383,12 +462,17 @@ static inline void spectrum_analyse(void)
 	printf("FREQUENCY         =%s\n", num2str(v(avg_freq)));
 	printf("RUNNING FREQUENCY =%s\n", num2str(avg_freq_running));
 
-	if (note.freq < avg_freq_running - int2num(1))
+	lcd_clear();
+	if (note.freq < avg_freq_running - int2num(1)) {
 		printf("TOO HIGH\n");
-	else if (note.freq > avg_freq_running + int2num(1))
+		lcd_print("too high\n");
+	} else if (note.freq > avg_freq_running + int2num(1)) {
 		printf("TOO LOW\n");
-	else
+		lcd_print("too high\n");
+	} else {
 		printf("TUNED\n");
+		lcd_print(" TUNED! ");
+	}
 
 }
 
@@ -432,7 +516,7 @@ static void spectrum_display(void)
 
 static void self_test(void)
 {
-	/* Check input from ADC. It should 
+	/* Check input from ADC. It should
 	 * have some sensible values */
 	int count;
 	int drop;
@@ -458,21 +542,25 @@ static void self_test(void)
 				ADCSRA |= (1<<ADIF);
 			} while (--drop);
 			tmp = ADC;
+
+			PORTA ^= (1<<PA1); /* Blink IR light */
+
 			if (tmp < min)
 				min = tmp;
 			if (tmp > max)
 				max = tmp;
 		} while(--count);
-		
+
 		if (max < 10 || min > 800)
 			error();
 		else if (max == min)
 			error();
 		else {
-			LEDOn(LED_G);
 			break;
 		}
 	}
+
+	PORTA |= (1<<PA1); /* Disable IR light */
 
 	/* Check if memory still holds it's values */
 	for (count=0; count < FFT_N; count++) {
@@ -492,7 +580,8 @@ inline void ADCInit(void)
 	DDRA = 0x00;
 	PORTA = 0x00;
 
-	ADMUX = 2 | (1<<REFS0);
+//	ADMUX = 0 | (1<<REFS0);
+	ADMUX = 3 | (1<<REFS0);
 
 	/* Prescaler = / 128; 16*10^6 / 128 = 125000 */
 	/* Prescaler = / 64; 16*10^6 / 64 = 250000 */
@@ -510,32 +599,35 @@ inline void ADCInit(void)
 
 int main(void)
 {
-	LEDInit();
-	LEDOn(LED_B);
-
-	for (;;) {
-		lcd_init();
-		sleep(1);
-		lcd_print("XXXX");
-		sleep(1);
-		lcd_clear();
-	}
-
 	SerialInit();
 	ADCInit();
 
+	_delay_ms(20);
+	_delay_ms(20);
+	_delay_ms(20);
+
+	lcd_init();
+	lcd_chars();
+	lcd_clear();
+	lcd_print("LCDInit\n");
+
 	sei();
+
+	/* Enable output IR */
+	PORTA |= (1<<PA1);
+	DDRA |= (1<<PA1);
 
 	self_test();
 
-	printf("Init\n");
+	/* Enable IR */
+	PORTA &= ~(1<<PA1);
 
-        LEDOff(LED_RGB);
+	lcd_print("Init OK");
+
 	for (;;) {
 		/* Wait for buffer to fill up */
-		do_capture(NOTE_A);
+		do_capture(NOTE_E);
 
-//		fft_input(buff(capture), v.fft_buff);
 		fft_execute(v.fft_buff);
 		fft_output(v.fft_buff, spectrum);
 
