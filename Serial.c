@@ -13,8 +13,8 @@ static int Serial_putchar(char c, FILE *Stream)
 	if (c == '@')
 		LEDOn(LED_G);
 
-	while ( !(UCSR0A & (1<<UDRE0)) );
-	UDR0 = c;
+	while ( !(UCSRA & (1<<UDRE)) );
+	UDR = c;
 
 	if (c == '@')
 		LEDOff(LED_G);
@@ -34,17 +34,17 @@ static int Serial_getchar(FILE *Stream)
 static inline void SerialInit(void)
 {
 	/* Set baudrate */
-	UBRR0H = (unsigned char)(UART_BAUDRATE>>8);
-	UBRR0L = (unsigned char)UART_BAUDRATE;
+	UBRRH = (unsigned char)(UART_BAUDRATE>>8);
+	UBRRL = (unsigned char)UART_BAUDRATE;
 
 	/* Double asynchronous UART speed */
-	UCSR0A = (1<<U2X0);
+	UCSRA = (1<<U2X);
 
 	/* Enable receiver and transmitter */
-	UCSR0B = (1<<RXEN0) | (1<<TXEN0);
+	UCSRB = (1<<RXEN) | (1<<TXEN);
 
 	/* even parity, 8 bits of data, 1 stop bits */
-	UCSR0C = /*(1<<URSEL0) | */(0<<USBS0) | (1<<UCSZ00) | (1<<UCSZ01) | (1<<UPM01);
+	UCSRC = (1<<URSEL) | (0<<USBS) | (1<<UCSZ0) | (1<<UCSZ1) | (1<<UPM1);
 
 	DDRD |= (1<<PD1);
 	PORTD |= (1<<PD1);

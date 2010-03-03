@@ -4,11 +4,11 @@ LDFLAGS=-Wl,-gc-sections
 #-Wl,-u,vfprintf -lprintf_min
 
 #OPT=-Os
-CFLAGS=-I/usr/avr/include -pipe -mmcu=atmega644 $(OPT) $(LDFLAGS) -Wall -Winline $(INLINE)
+CFLAGS=-I/usr/avr/include -pipe -mmcu=atmega32 $(OPT) $(LDFLAGS) -Wall -Winline $(INLINE)
 CC=avr-gcc
 UISP=uisp
 
-Main: Main.c Serial.c FFT/ffft.S
+Main: Main.c Serial.c FFT/ffft.S Sleep.c LCD.c
 	$(CC) $(CFLAGS) -o Main Main.c FFT/ffft.S
 	$(CC) -S $(CFLAGS) -o Main.s Main.c > /dev/null 2>&1
 	avr-objcopy -j .text -j .data -O ihex Main Main.hex
@@ -20,8 +20,8 @@ Main: Main.c Serial.c FFT/ffft.S
 
 Send: Main
 	# $(UISP) -dlpt=/dev/parport0 --segment=flash --erase -dprog=dapa --upload if=Main.hex -dpart=atmega32 --verify
-	# avrdude -c usbasp -p m644 -U flash:w:./Main.hex:i   -v 
-	avrdude -c usbasp -p m644 -U flash:w:./Main.hex:i   -v
+	# avrdude -c usbasp -p m32 -U flash:w:./Main.hex:i   -v 
+	avrdude -c usbasp -p m32 -U flash:w:./Main.hex:i   -v -F
 
 SendN: Main
 	$(UISP) -dlpt=/dev/parport0 --segment=flash --erase -dprog=dapa --upload if=Main.hex -dpart=atmega64 

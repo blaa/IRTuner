@@ -13,6 +13,8 @@
 #include <util/delay.h>
 
 /*** Local includes ***/
+#include "Sleep.c"
+#include "LCD.c"
 #include "LED.c"
 #include "Serial.c"
 
@@ -70,7 +72,7 @@ typedef int32_t num_t;
 /*** Constants ***/
 const char spectrum_min = 10;
 const char spectrum_max = FFT_N/2 - 10;
-const int harm_max = 15;
+const int harm_max = 4;
 
 /*** Buffers + Variables ***/
 union {
@@ -82,24 +84,30 @@ union {
 	/* After fft_buff is unused we can use it's memory
 	 * to hold variables required during analysis */
 	struct {
-		uint16_t max;
-		uint16_t max_pos;
+		/* Generic helper for calculating averages */
+		uint16_t avg_helper;
 
-		uint16_t avg_sum;
-		uint32_t avg;
-
-		uint16_t avg_before_sum, avg_after_sum;
-		uint32_t avg_before, avg_after;
-
-		/* We have to find all harmonics */
-		num_t harms[15];
-		uint16_t harm_wage[15];
-		int harm_main; /* The one with biggest wage */
-		uint16_t harm_main_wage;
-		int harm_cnt;
+		/* For locating maximas */
+		uint32_t avg_global;
 
 		uint16_t running_avg;
 		char dist_between_max;
+
+
+		/* Number of harmonics found */
+		int harm_cnt;
+
+		/* Index of the one with biggest wage + it's wage */
+		int harm_main; 
+		uint16_t harm_main_wage;
+
+		/* Harmonics found + their wages */
+		num_t harms[4];
+		uint16_t harm_wage[4];
+
+		/* Averaging correct frequency */
+		num_t avg_freq;
+
 	} vars;
 } v;
 
@@ -111,6 +119,14 @@ volatile const prog_int16_t *window_cur = tbl_window;
 const complex_t *fft_buff_end = &v.fft_buff[FFT_N];
 volatile complex_t * volatile fft_buff_cur = &v.fft_buff[FFT_N];
 
+
+/* Resulting frequency is averaged further */
+num_t avg_freq_running;
+		
+/* And ignored after some time of no measurements */
+uint16_t avg_freq_running_time;
+
+
 /* Incremented in ADC with 16*10^6/ 128 / 13 = 9615 Hz freq */
 volatile uint16_t tick;
 
@@ -121,36 +137,37 @@ volatile uint16_t tick;
 volatile struct {
 	char current;
 	char divisor;
-	int bar;
+	num_t freq;
+	int time_relevant;
 } note;
 
 enum { NOTE_E2 = 0, NOTE_A, NOTE_D, NOTE_G, NOTE_B, NOTE_E };
 struct {
 	char divisor;
-	char bar;
 	uint16_t freq;
+	int time_relevant; /* Time in which running average of freq is relevant */
 } notes[] = {
 	/* f=82.407 presc=128 div=29 bar=32 err=0.48425 scale=64  */
-	{29, 32, 8240U},
+	{29, 8240U, 3},
 	/* f=110.000 presc=128 div=22 bar=32 err=0.73427 scale=64  */
-	{22, 32, 11000U},
+	{22, 11000U, 3},
 	/* f=146.832 presc=128 div=16 bar=31 err=1.28663 scale=64  */
-	{16, 31, 14683U},
+	{16, 14683U, 5},
 	/* f=195.998 presc=128 div=12 bar=31 err=1.93750 scale=64  */
-	{12, 31, 19599U},
+	{12, 19599U, 7},
 	/* f=246.942 presc=128 div=10 bar=33 err=0.95463 scale=64  */
-	{10, 33, 24694U},
+	{10, 24694U, 8},
 	/* f=329.628 presc=128 div=7 bar=31 err=3.04714 scale=64  */
-	{7, 31, 32962U},
+	{7, 32962U, 10},
 };
-
 
 /* Initialize data for capture, select tone */
 static inline void do_capture(const int new_note)
 {
 	note.current = new_note;
 	note.divisor = notes[new_note].divisor;
-	note.bar = notes[new_note].bar;
+	note.freq = (num_t) notes[new_note].freq;
+	note.time_relevant = notes[new_note].time_relevant;
 
 	window_cur = tbl_window;
 	fft_buff_cur = v.fft_buff;
@@ -220,6 +237,8 @@ static const char *num2str(num_t number)
 	return num2str_buff;
 }
 
+#define int2num(x) (100L*x)
+
 /* Convert accurate bar position (two decimal places) 
  * into frequency according to current note divisor */
 static num_t bar2hz(const num_t bar)
@@ -233,14 +252,13 @@ static num_t bar2hz(const num_t bar)
 /* Method: Calculating frequency */
 static num_t estimate_bar(const int16_t bar)
 {
-	int32_t s;
 	int32_t avg;
 	int32_t avg_sum;
 	int i;
 
 	avg = avg_sum = 0;
 	for (i=1; i<=7; i++) {
-		s = spectrum[bar + i - 4];
+		const int32_t s = spectrum[bar + i - 4];
 		avg += i * s;
 		avg_sum += s;
 	}
@@ -262,13 +280,10 @@ static inline void spectrum_analyse(void)
 	 * We should see our main freq at note_bar it's harmonics:
 	 * note_bar-32, note_bar+96
 	 */
-	static int i, m;
-	static uint16_t s;
+	int i, m;
+	uint16_t s;
 
-	v(avg_before) = v(avg_after) = 0;
-	v(avg_before_sum) = v(avg_after_sum) = 0;
-	v(avg) = v(avg_sum) = 0;
-	v(max) = v(max_pos) = 0;
+	v(avg_global) = v(avg_helper) = 0;
 
 	/* Precalculations:
 	 * 1) Calculate global maximum for reference and it's position
@@ -282,31 +297,11 @@ static inline void spectrum_analyse(void)
 			continue;
 
 		/* Avg */
-		v(avg) += s;
-		v(avg_sum) += 1;
-
-		if (i < note.bar) {
-			v(avg_before) += s;
-			v(avg_before_sum)++;
-		} else {
-			v(avg_after) += s;
-			v(avg_after_sum)++;
-		}
-
-		/* Max */
-		if (s > v(max)) {
-			v(max) = s;
-			v(max_pos) = i;
-		}
+		v(avg_global) += s;
+		v(avg_helper) += 1;
 	}
 
-	v(avg) = v(avg_sum) ? v(avg)/v(avg_sum) : 0;
-	v(avg_before) = v(avg_before_sum) ? v(avg_before)/v(avg_before_sum) : 0;
-	v(avg_after_sum) = v(avg_after_sum) ? v(avg_after)/v(avg_after_sum) : 0;
-
-
-	printf(_("AVG: %5ld -- %5ld -- %5ld\n"), v(avg_before), v(avg), v(avg_after));
-	printf(_("Max=%u at %u (f=%s)\n"), v(max), v(max_pos), num2str(bar2hz(v(max_pos)*100)) );
+	v(avg_global) = v(avg_helper) ? v(avg_global)/v(avg_helper) : 0;
 
 	/* Calculate positions of all harmonics */
 	v(harm_main_wage) = 0;
@@ -332,14 +327,14 @@ static inline void spectrum_analyse(void)
 				goto not_max;
 		}
 
-		if (s <= v(avg)/4)
+		if (s <= v(avg_global))
 			goto not_max;
 
 		const num_t real_bar = estimate_bar(i);
 		if (real_bar != 0) {
 			const num_t freq = bar2hz(real_bar);
-			printf(_("Loc_simp=%d MAX_realpos=%s "), i, num2str(real_bar));
-			printf(_("FREQ=%s\n"), num2str(freq));
+			printf(_("Bar=%d / %s "), i, num2str(real_bar));
+			printf(_("FREQ=%s Value=%u (avg=%u)\n"), num2str(freq), spectrum[i], v(avg_global));
 
 			if (s > v(harm_main_wage)) {
 				/* Update main harmonic */
@@ -361,16 +356,51 @@ static inline void spectrum_analyse(void)
 		v(running_avg) += s;
 		v(running_avg) /= 2;
 	}
+
+	/* Count time for running freq so we will forget it after while */
+	if (avg_freq_running_time)
+		avg_freq_running_time--;
+
+	/* Ignore if there're no 3 harmonics visible */
+	if (v(harm_cnt) != 3)
+		return;
+
+	/* Do the average of all of them */
+	v(avg_freq) = v(harms)[1];
+	v(avg_freq) += v(harms)[0] * 2;
+	v(avg_freq) += v(harms)[2] * 2 / 3;
+	v(avg_freq) /= 3;
+
+	if (avg_freq_running_time) {
+		avg_freq_running += v(avg_freq);
+		avg_freq_running /= 2;
+	} else {
+		avg_freq_running = v(avg_freq);
+	}
+
+	avg_freq_running_time = note.time_relevant;
+
+	printf("FREQUENCY         =%s\n", num2str(v(avg_freq)));
+	printf("RUNNING FREQUENCY =%s\n", num2str(avg_freq_running));
+
+	if (note.freq < avg_freq_running - int2num(1))
+		printf("TOO HIGH\n");
+	else if (note.freq > avg_freq_running + int2num(1))
+		printf("TOO LOW\n");
+	else
+		printf("TUNED\n");
+
 }
 
 static void spectrum_display(void)
 {
 	static uint16_t s;
 	static int i, m;
+	const int wider = 3;
 
 	/* Horizontal spectrum: */
 	for (i = 60; i>0; i-=3) {
-		for (m = spectrum_min; m < spectrum_max; m++) {
+		for (m = spectrum_min-wider; m < spectrum_max+wider; m++) {
 			s = spectrum[m];
 			if (s > i)
 				putchar('*');
@@ -380,20 +410,20 @@ static void spectrum_display(void)
 		putchar('\n');
 	}
 
-	for (i = spectrum_min; i < spectrum_max; i++)
+	for (i = spectrum_min-wider; i < spectrum_max+wider; i++)
 		if (i>=100)
 			putchar('1');
 		else
 			putchar(' ');
 	putchar('\n');
 
-	for (i = spectrum_min; i < spectrum_max; i++) {
+	for (i = spectrum_min-wider; i < spectrum_max+wider; i++) {
 		const char tmp  = (i % 100)/10;
 		putchar(tmp + '0');
 	}
 	putchar('\n');
 
-	for (i = spectrum_min; i < spectrum_max; i++)
+	for (i = spectrum_min-wider; i < spectrum_max+wider; i++)
 		putchar(i % 10 + '0');
 	putchar('\n');
 
@@ -483,6 +513,14 @@ int main(void)
 	LEDInit();
 	LEDOn(LED_B);
 
+	for (;;) {
+		lcd_init();
+		sleep(1);
+		lcd_print("XXXX");
+		sleep(1);
+		lcd_clear();
+	}
+
 	SerialInit();
 	ADCInit();
 
@@ -495,13 +533,13 @@ int main(void)
         LEDOff(LED_RGB);
 	for (;;) {
 		/* Wait for buffer to fill up */
-		do_capture(NOTE_E2);
+		do_capture(NOTE_A);
 
 //		fft_input(buff(capture), v.fft_buff);
 		fft_execute(v.fft_buff);
 		fft_output(v.fft_buff, spectrum);
 
-		printf(_("\nNote=%d Bar=%d Divisor=%d\n"), note.current, note.bar, note.divisor);
+		printf(_("\nNote=%d freq=%s Divisor=%d\n"), note.current, num2str(note.freq), note.divisor);
 		spectrum_analyse();
 		spectrum_display();
 	}
