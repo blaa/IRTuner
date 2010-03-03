@@ -160,6 +160,7 @@ volatile struct {
 	char divisor;
 	num_t freq;
 	int time_relevant;
+	int correction;
 } note;
 
 enum { NOTE_E2 = 0, NOTE_A, NOTE_D, NOTE_G, NOTE_B, NOTE_E };
@@ -167,20 +168,22 @@ struct {
 	char divisor;
 	uint16_t freq;
 	int time_relevant; /* Time in which running average of freq is relevant */
+	int correction;
 } notes[] = {
 	/* f=82.407 presc=128 div=29 bar=32 err=0.48425 scale=64  */
-	{29, 8240U, 3},
+	{29, 8240U, 3, 0},
 	/* f=110.000 presc=128 div=22 bar=32 err=0.73427 scale=64  */
-	{22, 11000U, 3},
+	{22, 11000U, 3, -650},
 	/* f=146.832 presc=128 div=16 bar=31 err=1.28663 scale=64  */
-	{16, 14683U, 5},
+	{16, 14683U, 5, 0},
 	/* f=195.998 presc=128 div=12 bar=31 err=1.93750 scale=64  */
-	{12, 19599U, 7},
+	{12, 19599U, 7, -350},
 	/* f=246.942 presc=128 div=10 bar=33 err=0.95463 scale=64  */
-	{10, 24694U, 8},
+	{10, 24694U, 8, -750},
 	/* f=329.628 presc=128 div=7 bar=31 err=3.04714 scale=64  */
-	{7, 32962U, 10},
+	{7, 32962U, 10, 500},
 };
+
 
 void lcd_update(void)
 {
@@ -220,6 +223,7 @@ static inline void do_capture(const int new_note)
 	note.divisor = notes[new_note].divisor;
 	note.freq = (num_t) notes[new_note].freq;
 	note.time_relevant = notes[new_note].time_relevant;
+	note.correction = notes[new_note].correction;
 
 	window_cur = tbl_window;
 	fft_buff_cur = v.fft_buff;
@@ -261,7 +265,7 @@ ISR(ADC_vect)
 
 	/* Remove background and multiply to better fit FFT algorithm */
 	adc_cur -= background;
-	adc_cur *= 500;
+	adc_cur *= 1000;
 
 	/* Store */
 	const int16_t tmp = fmuls_f(adc_cur, pgm_read_word_near(window_cur));
@@ -449,6 +453,7 @@ static inline void spectrum_analyse(void)
 	}
 
 
+	v(avg_freq) += note.correction;
 
 	if (avg_freq_running_time) {
 		avg_freq_running += v(avg_freq);
@@ -480,7 +485,7 @@ static void spectrum_display(void)
 {
 	static uint16_t s;
 	static int i, m;
-	const int wider = 3;
+	const int wider = 10;
 
 	/* Horizontal spectrum: */
 	for (i = 60; i>0; i-=3) {

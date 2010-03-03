@@ -53,7 +53,7 @@ for f in note_hz:
     sm_div = 0
     presc = 128
     scale = 64
-    bar = scale/2 
+    bar = 48 #scale/2 
 
     er, div, real_bar = error(f, dest_B=bar, presc=presc, scale=scale)
     if er < sm_err:
@@ -63,4 +63,4 @@ for f in note_hz:
         sm_presc = presc
         
     print "	/* f=%.3f presc=%d div=%d bar=%d err=%.5f scale=%d  */" % (f, sm_presc, sm_div, sm_bar, sm_err, scale)
-    print "	{%d, %d, %dU}, " % (sm_div, sm_bar, f * 100)
+    print "	{%d, %dU}, " % (sm_div, sm_bar, f * 100)
