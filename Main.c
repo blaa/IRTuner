@@ -31,7 +31,7 @@ static void error(const char what)
 {
 	lcd_clear();
 	lcd_send(what + '0');
-	usleep(40);
+	usleep(45);
 	lcd_print(" SENSOR\n ERROR!");
 }
 
@@ -170,47 +170,35 @@ volatile static char clicked;
 
 /* Current selected note (divisor is required
  * for gathering windowed data) */
-volatile struct {
-	char current;
-	char divisor;
-	num_t freq;
-	int time_relevant;
-	int correction;
-	char name;
-} note;
+static unsigned int current_note;
 
 enum { NOTE_E2 = 0, NOTE_A, NOTE_D, NOTE_G, NOTE_B, NOTE_E };
 struct {
-	char divisor;
-	uint16_t freq;
-	int time_relevant; /* Time in which running average of freq is relevant */
-	int correction;
 	char name;
+	char divisor;
+	uint16_t freq; /* Make it num_t? FIXME */
+	int16_t time_relevant; /* Time in which running average of freq is relevant */
+	int16_t correction;
 } notes[] = {
 	/* f=82.407 presc=128 div=29 bar=32 err=0.48425 scale=64  */
-	{29, 8240U, 3, 0, 'E'},
+	{'E', 29, 8240U, 3, 0},
 	/* f=110.000 presc=128 div=22 bar=32 err=0.73427 scale=64  */
-	{22, 11000U, 3, -650, 'A'},
+	{'A', 22, 11000U, 3, -650},
 	/* f=146.832 presc=128 div=16 bar=31 err=1.28663 scale=64  */
-	{16, 14683U, 5, 0, 'D'},
+	{'D', 16, 14683U, 5, 0},
 	/* f=195.998 presc=128 div=12 bar=31 err=1.93750 scale=64  */
-	{12, 19599U, 7, -350, 'G'},
+	{'G', 12, 19599U, 7, -350},
 	/* f=246.942 presc=128 div=10 bar=33 err=0.95463 scale=64  */
-	{10, 24694U, 8, -750, 'B'},
+	{'B', 10, 24694U, 8, -750},
 	/* f=329.628 presc=128 div=7 bar=31 err=3.04714 scale=64  */
-	{7, 32962U, 10, 500, 'e'},
+	{'e', 7, 32962U, 10, 500},
 };
 
 
 /* Initialize data for capture, select tone */
 static inline void do_capture(const int new_note)
 {
-	note.current = new_note;
-	note.divisor = notes[new_note].divisor;
-	note.freq = (num_t) notes[new_note].freq;
-	note.time_relevant = notes[new_note].time_relevant;
-	note.correction = notes[new_note].correction;
-	note.name = notes[new_note].name;
+	current_note = new_note;
 
 	window_cur = tbl_window;
 	fft_buff_cur = v.fft_buff;
@@ -254,7 +242,7 @@ ISR(ADC_vect)
 		return;
 
 	/* Increment divisor and drop some results */
-	if (++i % note.divisor != 0)
+	if (++i % notes[current_note].divisor != 0)
 		return;
 
 	/* Remove background and multiply to better fit FFT algorithm */
@@ -292,18 +280,17 @@ static num_t bar2hz(const num_t bar)
 {
 	/* solve(16*10^6 / 64 / 13 / D / 2  *  (B/64) = f, f),numer;   */
 	/* for prescaler / 128: f = 75.1201923 * B / D */
-	return ((7512UL * bar) / note.divisor) / 100L;
+	return ((7512UL * bar) / notes[current_note].divisor) / 100L;
 }
 
-void lcd_update(void)
+static void lcd_update(void)
 {
-	int i;
-//	const int32_t error = ((avg_freq_running - note.freq) * 10000 / note.freq) / 3 + 20;
-	const int32_t error = ((avg_freq_running - note.freq) * 3 / 100) + 20;
+	static int i;
+//	const int32_t error = ((avg_freq_running - notes[current_note].freq) * 10000 / notes[current_note].freq) / 3 + 20;
+	const int32_t error = 
+		((avg_freq_running - notes[current_note].freq) * 3 / 100) + 20;
 	const int pos = (error-1)/5;
 
-	printf("er:%ld pos:%d pos:%ld\n", error, pos, error%5);
-	
 	if (tick < 2400) {
 		/* Don't update too often */
 		return;
@@ -315,10 +302,7 @@ void lcd_update(void)
 		lcd_print("-- \x07\x06 --");
 		tick = 32000;
 	} else {
-
 		/* Code error in range 0 30 - 15 meaning no error */
-
-
 		if (error <= 0) {
 			lcd_print("<");
 		} else if (error > 40) {
@@ -326,7 +310,7 @@ void lcd_update(void)
 		} else {
 			lcd_goto(pos, 0);
 			lcd_send(1 + (error-1) % 5);
-			usleep(40);
+			usleep(45);
 		}
 
 		/* Mark center */
@@ -337,12 +321,12 @@ void lcd_update(void)
 			lcd_goto(3, 0);
 			lcd_send(7);
 		}
-		usleep(40);
+		usleep(45);
 	}
 
 	for (i=1; i<sizeof(v(lcd_buff)); i++)
 		v(lcd_buff)[i] = ' ';
-	*v(lcd_buff) = note.name;
+	*v(lcd_buff) = notes[current_note].name;
 
 	if (tick >= 32000) {
 		strcpy(v(lcd_buff)+2, "SZARP!");
@@ -350,7 +334,7 @@ void lcd_update(void)
 		/* 01234567
 		 * N_123.34  LEN=6, 8-LEN
 		 */
-		const char *freq = num2str(avg_freq_running - note.freq);
+		const char *freq = num2str(avg_freq_running - notes[current_note].freq);
 		const int len = strlen(freq);
 		for (i=0; i<len; i++) {
 			v(lcd_buff)[8-len + i] = freq[i];
@@ -512,7 +496,7 @@ static inline void spectrum_analyse(void)
 	}
 
 
-	v(avg_freq) += note.correction;
+	v(avg_freq) += notes[current_note].correction;
 
 	if (avg_freq_running_time) {
 		avg_freq_running += v(avg_freq);
@@ -521,16 +505,16 @@ static inline void spectrum_analyse(void)
 		avg_freq_running = v(avg_freq);
 	}
 
-	avg_freq_running_time = note.time_relevant;
+	avg_freq_running_time = notes[current_note].time_relevant;
 
 	printf("FREQUENCY         =%s\n", num2str(v(avg_freq)));
 	printf("RUNNING FREQUENCY =%s\n", num2str(avg_freq_running));
 
 	lcd_update();
 
-	if (note.freq < avg_freq_running - int2num(1)) {
+	if (notes[current_note].freq < avg_freq_running - int2num(1)) {
 		printf("TOO HIGH\n");
-	} else if (note.freq > avg_freq_running + int2num(1)) {
+	} else if (notes[current_note].freq > avg_freq_running + int2num(1)) {
 		printf("TOO LOW\n");
 	} else {
 		printf("TUNED\n");
@@ -694,23 +678,25 @@ int main(void)
 	lcd_print("Init OK");
 
 	tick = 32000;
-	note.current = NOTE_E2;
+	current_note = NOTE_E;
 	for (;;) {
 		if (clicked) {
-			note.current++;
-			if (note.current > NOTE_E)
-				note.current = NOTE_E2;
+			current_note++;
+			if (current_note > NOTE_E)
+				current_note = NOTE_E2;
 			
 			clicked = 0;
 		}
 
 		/* Wait for buffer to fill up */
-		do_capture(note.current);
+		do_capture(current_note);
 
 		fft_execute(v.fft_buff);
 		fft_output(v.fft_buff, spectrum);
 
-		printf("\nNote=%d freq=%s Divisor=%d\n", note.current, num2str(note.freq), note.divisor);
+		printf("\nNote=%d freq=%s Divisor=%d\n", current_note, 
+		       num2str(notes[current_note].freq),
+		       notes[current_note].divisor);
 		spectrum_analyse();
 /*		spectrum_display(); */
 	}
