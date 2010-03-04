@@ -63,4 +63,9 @@ for f in note_hz:
         sm_presc = presc
         
     print "	/* f=%.3f presc=%d div=%d bar=%d err=%.5f scale=%d  */" % (f, sm_presc, sm_div, sm_bar, sm_err, scale)
-    print "	{%d, %dU}, " % (sm_div, sm_bar, f * 100)
+    print "	{%d, %dU}, " % (sm_div, f * 100)
+
+
+
+for i in range(1,41):
+        print "i:", i, "spaces:", (i-1)/5, "char:", ((i-1)%5)

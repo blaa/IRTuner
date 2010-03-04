@@ -30,6 +30,17 @@ static void error(void)
 		_delay_ms(20);
 }
 
+void button_init(void)
+{
+	DDRB &= ~(1<<PB2);
+	PORTB |= (1<<PB2);
+}
+
+char button_clicked(void)
+{
+	return !(PINB & (1<<PB2));
+}
+
 /************************************************************************************************************
  * Guitar tunner - NOTES
  *
@@ -128,7 +139,10 @@ union {
 		/* Averaging correct frequency */
 		num_t avg_freq;
 
+
+		/* Buffers of functions */
 		char lcd_buff[20];
+		char num2str_buff[20];
 	} vars;
 } v;
 
@@ -140,16 +154,15 @@ volatile const prog_int16_t *window_cur = tbl_window;
 const complex_t *fft_buff_end = &v.fft_buff[FFT_N];
 volatile complex_t * volatile fft_buff_cur = &v.fft_buff[FFT_N];
 
-
 /* Resulting frequency is averaged further */
-num_t avg_freq_running;
+static num_t avg_freq_running;
 
 /* And ignored after some time of no measurements */
-uint16_t avg_freq_running_time;
-
+static uint16_t avg_freq_running_time;
 
 /* Incremented in ADC with 16*10^6/ 128 / 13 = 9615 Hz freq */
-volatile uint16_t tick;
+volatile static uint32_t tick, button_delay;
+volatile static char clicked;
 
 /*** NOTE data ***/
 
@@ -161,6 +174,7 @@ volatile struct {
 	num_t freq;
 	int time_relevant;
 	int correction;
+	char name;
 } note;
 
 enum { NOTE_E2 = 0, NOTE_A, NOTE_D, NOTE_G, NOTE_B, NOTE_E };
@@ -169,50 +183,21 @@ struct {
 	uint16_t freq;
 	int time_relevant; /* Time in which running average of freq is relevant */
 	int correction;
+	char name;
 } notes[] = {
 	/* f=82.407 presc=128 div=29 bar=32 err=0.48425 scale=64  */
-	{29, 8240U, 3, 0},
+	{29, 8240U, 3, 0, 'E'},
 	/* f=110.000 presc=128 div=22 bar=32 err=0.73427 scale=64  */
-	{22, 11000U, 3, -650},
+	{22, 11000U, 3, -650, 'A'},
 	/* f=146.832 presc=128 div=16 bar=31 err=1.28663 scale=64  */
-	{16, 14683U, 5, 0},
+	{16, 14683U, 5, 0, 'D'},
 	/* f=195.998 presc=128 div=12 bar=31 err=1.93750 scale=64  */
-	{12, 19599U, 7, -350},
+	{12, 19599U, 7, -350, 'G'},
 	/* f=246.942 presc=128 div=10 bar=33 err=0.95463 scale=64  */
-	{10, 24694U, 8, -750},
+	{10, 24694U, 8, -750, 'B'},
 	/* f=329.628 presc=128 div=7 bar=31 err=3.04714 scale=64  */
-	{7, 32962U, 10, 500},
+	{7, 32962U, 10, 500, 'e'},
 };
-
-
-void lcd_update(void)
-{
-	/* First line - accuracy of current measurement */
-
-	/* Second: X ABC.DE - frequency + Current note */
-	lcd_clear();
-
-	lcd_print("line\n");
-
-/*
-	static char num2str_buff[20] = {0};
-	static int16_t rest;
-	rest = number % 100;
-	if (rest < 0) rest = -rest;
-
-	itoa((int16_t)(number/100L), num2str_buff, 10);
-	const int pos = strlen(num2str_buff);
-	num2str_buff[pos] = '.';
-	itoa(rest, num2str_buff+pos+1, 10);
-
-	return num2str_buff;
-
-
-	sprintf(v(lcd_buff), "
-*/
-
-
-}
 
 
 
@@ -224,6 +209,7 @@ static inline void do_capture(const int new_note)
 	note.freq = (num_t) notes[new_note].freq;
 	note.time_relevant = notes[new_note].time_relevant;
 	note.correction = notes[new_note].correction;
+	note.name = notes[new_note].name;
 
 	window_cur = tbl_window;
 	fft_buff_cur = v.fft_buff;
@@ -248,7 +234,14 @@ ISR(ADC_vect)
 	/* Read measurement. It will get averaged */
 	adc_cur = ADC - 512;
 
+	/* Some general periodic tasks. Check button increment counter */
 	tick++;
+	if (button_delay) {
+		--button_delay;
+	} else if (button_clicked()) {
+		clicked = 1;
+		button_delay = 32000;
+	}
 
 	/* Calculate background all the time */
 	background *= 7;
@@ -276,21 +269,18 @@ ISR(ADC_vect)
 	window_cur++;
 }
 
-
-/* DEBUG function. Converts num_t into a string */
 static const char *num2str(num_t number)
 {
-	static char num2str_buff[20] = {0};
 	static int16_t rest;
 	rest = number % 100;
 	if (rest < 0) rest = -rest;
 
-	itoa((int16_t)(number/100L), num2str_buff, 10);
-	const int pos = strlen(num2str_buff);
-	num2str_buff[pos] = '.';
-	itoa(rest, num2str_buff+pos+1, 10);
+	itoa((int16_t)(number/100L), v(num2str_buff), 10);
+	const int pos = strlen(v(num2str_buff));
+	v(num2str_buff)[pos] = '.';
+	itoa(rest, v(num2str_buff)+pos+1, 10);
 
-	return num2str_buff;
+	return v(num2str_buff);
 }
 
 #define int2num(x) (100L*x)
@@ -300,10 +290,62 @@ static const char *num2str(num_t number)
 static num_t bar2hz(const num_t bar)
 {
 	/* solve(16*10^6 / 64 / 13 / D / 2  *  (B/64) = f, f),numer;   */
-
 	/* for prescaler / 128: f = 75.1201923 * B / D */
 	return ((7512UL * bar) / note.divisor) / 100L;
 }
+
+void lcd_update(void)
+{
+	int i;
+	lcd_clear();
+
+	if (tick > 32000) {
+		lcd_print("-- \x07\x06 --");
+		tick = 32000;
+	} else {
+		/* Code error in range 0 30 - 15 meaning no error */
+		const int32_t error = ((avg_freq_running - note.freq) / 10) + 20;
+		const int pos = (error-1)/5;
+		if (error <= 0) {
+			lcd_print("<");
+		} else if (error > 40) {
+			lcd_print("       >");
+		} else {
+			lcd_goto(pos, 0);
+			lcd_send(1 + (error-1) % 5);
+			usleep(40);
+		}
+
+		/* Mark center */
+		if (pos == 3) {
+			lcd_goto(4, 0);
+			lcd_send(6);
+		} else {
+			lcd_goto(3, 0);
+			lcd_send(7);
+		}
+		usleep(40);
+	}
+
+	for (i=1; i<sizeof(v(lcd_buff)); i++)
+		v(lcd_buff)[i] = ' ';
+	*v(lcd_buff) = note.name;
+
+	if (tick >= 32000) {
+		strcpy(v(lcd_buff)+2, "SZARP!");
+	} else { 
+		const char *freq = num2str(avg_freq_running);
+		const int len = strlen(freq);
+		for (i=0; i<len; i++) {
+			v(lcd_buff)[8-len + i] = freq[i];
+		}
+	}
+
+	lcd_goto(0, 1);
+	lcd_print(v(lcd_buff));
+}
+
+
 
 /* Method: Calculating frequency */
 static num_t estimate_bar(const int16_t bar)
@@ -449,6 +491,7 @@ static inline void spectrum_analyse(void)
 		v(avg_freq) /= 2;
 		break;
 	default:
+		lcd_update();
 		return;
 	}
 
@@ -467,18 +510,18 @@ static inline void spectrum_analyse(void)
 	printf("FREQUENCY         =%s\n", num2str(v(avg_freq)));
 	printf("RUNNING FREQUENCY =%s\n", num2str(avg_freq_running));
 
-	lcd_clear();
+	lcd_update();
+
 	if (note.freq < avg_freq_running - int2num(1)) {
 		printf("TOO HIGH\n");
-		lcd_print("too high\n");
 	} else if (note.freq > avg_freq_running + int2num(1)) {
 		printf("TOO LOW\n");
-		lcd_print("too high\n");
 	} else {
 		printf("TUNED\n");
-		lcd_print(" TUNED! ");
 	}
 
+	/* Count time to next correct measurement */
+	tick = 0;
 }
 
 static void spectrum_display(void)
@@ -580,13 +623,13 @@ static void self_test(void)
         sei();
 }
 
-inline void ADCInit(void)
+inline void adc_init(void)
 {
 	DDRA = 0x00;
 	PORTA = 0x00;
 
-//	ADMUX = 0 | (1<<REFS0);
-	ADMUX = 3 | (1<<REFS0);
+	ADMUX = 0 | (1<<REFS0);
+//	ADMUX = 3 | (1<<REFS0);
 
 	/* Prescaler = / 128; 16*10^6 / 128 = 125000 */
 	/* Prescaler = / 64; 16*10^6 / 64 = 250000 */
@@ -604,8 +647,10 @@ inline void ADCInit(void)
 
 int main(void)
 {
-	SerialInit();
-	ADCInit();
+	serial_init();
+	adc_init();
+
+	button_init();
 
 	_delay_ms(20);
 	_delay_ms(20);
@@ -629,9 +674,19 @@ int main(void)
 
 	lcd_print("Init OK");
 
+	tick = 32000;
+	note.current = NOTE_E2;
 	for (;;) {
+		if (clicked) {
+			note.current++;
+			if (note.current > NOTE_E)
+				note.current = NOTE_E2;
+			
+			clicked = 0;
+		}
+
 		/* Wait for buffer to fill up */
-		do_capture(NOTE_E);
+		do_capture(note.current);
 
 		fft_execute(v.fft_buff);
 		fft_output(v.fft_buff, spectrum);

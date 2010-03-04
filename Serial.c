@@ -6,9 +6,9 @@
  ********************/
 const uint16_t UART_BAUDRATE = 16; /* 115200 */
 
-static FILE Serial_stdout;
+static FILE serial_stdout;
 
-static int Serial_putchar(char c, FILE *Stream)
+static int serial_putchar(char c, FILE *Stream)
 {
 	while ( !(UCSRA & (1<<UDRE)) );
 	UDR = c;
@@ -16,7 +16,7 @@ static int Serial_putchar(char c, FILE *Stream)
 }
 
 /*
-static int Serial_getchar(FILE *Stream)
+static int serial_getchar(FILE *Stream)
 {
 	if (!(UCSRA & (1<<RXC)))
 		return -1;
@@ -24,7 +24,7 @@ static int Serial_getchar(FILE *Stream)
 }
 */
 
-static inline void SerialInit(void)
+static inline void serial_init(void)
 {
 	/* Set baudrate */
 	UBRRH = (unsigned char)(UART_BAUDRATE>>8);
@@ -42,7 +42,7 @@ static inline void SerialInit(void)
 	DDRD |= (1<<PD1);
 	PORTD |= (1<<PD1);
 
-	fdev_setup_stream(&Serial_stdout, Serial_putchar, NULL, _FDEV_SETUP_RW);
-	stdout = &Serial_stdout;
+	fdev_setup_stream(&serial_stdout, serial_putchar, NULL, _FDEV_SETUP_RW);
+	stdout = &serial_stdout;
 }
 
