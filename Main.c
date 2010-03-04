@@ -12,22 +12,27 @@
 #include <avr/pgmspace.h>
 #include <util/delay.h>
 
+#define DEBUG
+
+#ifdef DEBUG
+#undef printf
+#define printf(x, ...) printf(x, ## __VA_ARGS__)
+// #define printf(x, ...) printf_P(PSTR(x), ## __VA_ARGS__)
+#else
+#define printf(x, ...) 
+#endif
+
 /*** Local includes ***/
 #include "Sleep.c"
 #include "LCD.c"
 #include "Serial.c"
 
-static void error(void)
+static void error(const char what)
 {
-	static int i;
-	static int cnt;
-	cnt = 5;
 	lcd_clear();
-
-	lcd_print("ERROR\nVery bad.");
-
-	for (i=0; i<3; i++)
-		_delay_ms(20);
+	lcd_send(what + '0');
+	usleep(40);
+	lcd_print(" SENSOR\n ERROR!");
 }
 
 void button_init(void)
@@ -90,9 +95,6 @@ char button_clicked(void)
 
 #include "FFT/ffft.h"
 
-/* Strings */
-#define _(x) x
-#define printf printf
 
 /* FFT Buffers and data*/
 #define v(x) v.vars.x
@@ -200,7 +202,6 @@ struct {
 };
 
 
-
 /* Initialize data for capture, select tone */
 static inline void do_capture(const int new_note)
 {
@@ -240,7 +241,7 @@ ISR(ADC_vect)
 		--button_delay;
 	} else if (button_clicked()) {
 		clicked = 1;
-		button_delay = 32000;
+		button_delay = 5000;
 	}
 
 	/* Calculate background all the time */
@@ -297,15 +298,27 @@ static num_t bar2hz(const num_t bar)
 void lcd_update(void)
 {
 	int i;
+//	const int32_t error = ((avg_freq_running - note.freq) * 10000 / note.freq) / 3 + 20;
+	const int32_t error = ((avg_freq_running - note.freq) * 3 / 100) + 20;
+	const int pos = (error-1)/5;
+
+	printf("er:%ld pos:%d pos:%ld\n", error, pos, error%5);
+	
+	if (tick < 2400) {
+		/* Don't update too often */
+		return;
+	}
+
 	lcd_clear();
 
 	if (tick > 32000) {
 		lcd_print("-- \x07\x06 --");
 		tick = 32000;
 	} else {
+
 		/* Code error in range 0 30 - 15 meaning no error */
-		const int32_t error = ((avg_freq_running - note.freq) / 10) + 20;
-		const int pos = (error-1)/5;
+
+
 		if (error <= 0) {
 			lcd_print("<");
 		} else if (error > 40) {
@@ -334,7 +347,10 @@ void lcd_update(void)
 	if (tick >= 32000) {
 		strcpy(v(lcd_buff)+2, "SZARP!");
 	} else { 
-		const char *freq = num2str(avg_freq_running);
+		/* 01234567
+		 * N_123.34  LEN=6, 8-LEN
+		 */
+		const char *freq = num2str(avg_freq_running - note.freq);
 		const int len = strlen(freq);
 		for (i=0; i<len; i++) {
 			v(lcd_buff)[8-len + i] = freq[i];
@@ -431,8 +447,8 @@ static inline void spectrum_analyse(void)
 		const num_t real_bar = estimate_bar(i);
 		if (real_bar != 0) {
 			const num_t freq = bar2hz(real_bar);
-			printf(_("Bar=%d / %s "), i, num2str(real_bar));
-			printf(_("FREQ=%s Value=%u (avg=%u)\n"), num2str(freq), spectrum[i], v(avg_global));
+			printf("Bar=%d / %s ", i, num2str(real_bar));
+			printf("FREQ=%s Value=%u (avg=%lu)\n", num2str(freq), spectrum[i], v(avg_global));
 
 			if (s > v(harm_main_wage)) {
 				/* Update main harmonic */
@@ -599,11 +615,13 @@ static void self_test(void)
 				max = tmp;
 		} while(--count);
 
-		if (max < 10 || min > 800)
-			error();
-		else if (max == min)
-			error();
-		else {
+		if (max < 10 || min > 800) {
+			printf("Self-test failed min/max %d/%d\n", min, max);
+			error(1);
+		} else if (max == min) {
+			printf("Self-test failed min=max=%d\n", min);
+			error(2);
+		} else {
 			break;
 		}
 	}
@@ -613,10 +631,10 @@ static void self_test(void)
 	/* Check if memory still holds it's values */
 	for (count=0; count < FFT_N; count++) {
 		if (v.fft_buff[count].i != count) {
-			for (;;) error();
+			for (;;) error(3);
 		}
 		if (v.fft_buff[count].r != 32000 - count) {
-			for (;;) error();
+			for (;;) error(3);
 		}
 	}
 
@@ -628,8 +646,8 @@ inline void adc_init(void)
 	DDRA = 0x00;
 	PORTA = 0x00;
 
-	ADMUX = 0 | (1<<REFS0);
-//	ADMUX = 3 | (1<<REFS0);
+//	ADMUX = 0 | (1<<REFS0);
+	ADMUX = 3 | (1<<REFS0);
 
 	/* Prescaler = / 128; 16*10^6 / 128 = 125000 */
 	/* Prescaler = / 64; 16*10^6 / 64 = 250000 */
@@ -659,7 +677,7 @@ int main(void)
 	lcd_init();
 	lcd_chars();
 	lcd_clear();
-	lcd_print("LCDInit\n");
+	lcd_print("  Self\n  Test");
 
 	sei();
 
@@ -672,6 +690,7 @@ int main(void)
 	/* Enable IR */
 	PORTA &= ~(1<<PA1);
 
+	lcd_clear();
 	lcd_print("Init OK");
 
 	tick = 32000;
@@ -691,9 +710,9 @@ int main(void)
 		fft_execute(v.fft_buff);
 		fft_output(v.fft_buff, spectrum);
 
-		printf(_("\nNote=%d freq=%s Divisor=%d\n"), note.current, num2str(note.freq), note.divisor);
+		printf("\nNote=%d freq=%s Divisor=%d\n", note.current, num2str(note.freq), note.divisor);
 		spectrum_analyse();
-		spectrum_display();
+/*		spectrum_display(); */
 	}
 	return 0;
 }
