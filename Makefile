@@ -38,4 +38,4 @@ EEPROM:
 	../srec_to_bin <  EEPROM.srec > EEPROM.binary
 
 clean:
-	rm -f Main.hex Main Main.s *.o Main.binary
+	rm -f Main.hex Main Main.s *.o Main.binary Main.eeprom

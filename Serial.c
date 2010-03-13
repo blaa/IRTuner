@@ -1,6 +1,6 @@
 /***********************************
  * (C) 2008 by Tomasz bla Fortuna <bla@thera.be>.
- * License: GPL3+ (See Docs/LICENSE)
+ * License: GPL3+ (See LICENSE)
  *
  * stdio driven hardware UART for debugging.
  ********************/

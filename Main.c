@@ -1,3 +1,35 @@
+/**********************************************************************
+ * avr_tuner
+ * Copyright (C) 2010 by Tomasz bla Fortuna <bla@thera.be>
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with otpasswd. If not, see <http://www.gnu.org/licenses/>.
+ *
+ * 
+ * FFT directory contains code not written by me which I found here:
+ * http://www.embedds.com/avr-audio-spectrum-monitor-on-graphical-lcd/
+ * http://elm-chan.org/works/akilcd/report_e.html
+ *
+ * The only "license" information I found was:
+ * All programs and designs in this site are supposed to be used for 
+ * hobby projects. Of course it can also be used for your business
+ * under your responsibility. 
+ *
+ * Which seems a bit like a "Public domain". Use at your own risk. ;-)
+ *
+ **********************************************************************/
+
+
 #define F_CPU 16000000UL
 #define inline
 
@@ -12,10 +44,9 @@
 #include <avr/pgmspace.h>
 #include <util/delay.h>
 
-#define DEBUG
+// #define DEBUG
 
 #ifdef DEBUG
-#undef printf
 #define printf(x, ...) printf(x, ## __VA_ARGS__)
 // #define printf(x, ...) printf_P(PSTR(x), ## __VA_ARGS__)
 #else
@@ -63,9 +94,9 @@ char button_clicked(void)
  * E2   82.407 .0121349   5274.048
  *
  * Formula:
- * Clock / ADCPrescaler / 13 / Divider / 2 * (BAR / 128) = Hz
+ * Clock / ADCPrescaler / 13 / Divider / 2 * (BAR / 64) = Hz
  * We are trying to hit 32 BAR
- * 16*10^6 / 128 / 13 / D / 2  *  (32/128) = f
+ * 16*10^6 / 128 / 13 / D / 2  *  (32/64) = f
  * D = 2403.846153 / f
  * B = 0.026624 f D
  *
@@ -141,9 +172,11 @@ union {
 		/* Averaging correct frequency */
 		num_t avg_freq;
 
-
-		/* Buffers of functions */
+		/* Buffers of lcd_update */
 		char lcd_buff[20];
+
+		/* For function num2str */
+		int16_t rest;
 		char num2str_buff[20];
 	} vars;
 } v;
@@ -203,9 +236,12 @@ static inline void do_capture(const int new_note)
 	window_cur = tbl_window;
 	fft_buff_cur = v.fft_buff;
 
-	set_sleep_mode(SLEEP_MODE_ADC);
-  //	while (fft_buff_cur != fft_buff_end) sleep_mode();
+#if DEBUG
 	while (fft_buff_cur != fft_buff_end);
+#else
+	set_sleep_mode(SLEEP_MODE_ADC);
+	while (fft_buff_cur != fft_buff_end) sleep_mode();
+#endif
 }
 
 /* Reads data from ADC */
@@ -260,14 +296,13 @@ ISR(ADC_vect)
 
 static const char *num2str(num_t number)
 {
-	static int16_t rest;
-	rest = number % 100;
-	if (rest < 0) rest = -rest;
+	v(rest) = number % 100;
+	if (v(rest) < 0) v(rest) = -v(rest);
 
 	itoa((int16_t)(number/100L), v(num2str_buff), 10);
 	const int pos = strlen(v(num2str_buff));
 	v(num2str_buff)[pos] = '.';
-	itoa(rest, v(num2str_buff)+pos+1, 10);
+	itoa(v(rest), v(num2str_buff)+pos+1, 10);
 
 	return v(num2str_buff);
 }
@@ -276,14 +311,14 @@ static const char *num2str(num_t number)
 
 /* Convert accurate bar position (two decimal places)
  * into frequency according to current note divisor */
-static num_t bar2hz(const num_t bar)
+static inline num_t bar2hz(const num_t bar)
 {
 	/* solve(16*10^6 / 64 / 13 / D / 2  *  (B/64) = f, f),numer;   */
 	/* for prescaler / 128: f = 75.1201923 * B / D */
 	return ((7512UL * bar) / notes[current_note].divisor) / 100L;
 }
 
-static void lcd_update(void)
+static inline void lcd_update(void)
 {
 	static int i;
 //	const int32_t error = ((avg_freq_running - notes[current_note].freq) * 10000 / notes[current_note].freq) / 3 + 20;
@@ -345,10 +380,8 @@ static void lcd_update(void)
 	lcd_print(v(lcd_buff));
 }
 
-
-
 /* Method: Calculating frequency */
-static num_t estimate_bar(const int16_t bar)
+static inline num_t estimate_bar(const int16_t bar)
 {
 	int32_t avg;
 	int32_t avg_sum;
@@ -524,7 +557,7 @@ static inline void spectrum_analyse(void)
 	tick = 0;
 }
 
-static void spectrum_display(void)
+static inline void spectrum_display(void)
 {
 	static uint16_t s;
 	static int i, m;
@@ -562,7 +595,7 @@ static void spectrum_display(void)
 	putchar('\n');
 }
 
-static void self_test(void)
+static inline void self_test(void)
 {
 	/* Check input from ADC. It should
 	 * have some sensible values */
@@ -625,13 +658,13 @@ static void self_test(void)
         sei();
 }
 
-inline void adc_init(void)
+static inline void adc_init(void)
 {
 	DDRA = 0x00;
 	PORTA = 0x00;
 
-//	ADMUX = 0 | (1<<REFS0);
-	ADMUX = 3 | (1<<REFS0);
+	ADMUX = 0 | (1<<REFS0);
+//	ADMUX = 3 | (1<<REFS0);
 
 	/* Prescaler = / 128; 16*10^6 / 128 = 125000 */
 	/* Prescaler = / 64; 16*10^6 / 64 = 250000 */
@@ -678,7 +711,7 @@ int main(void)
 	lcd_print("Init OK");
 
 	tick = 32000;
-	current_note = NOTE_E;
+	current_note = NOTE_E2;
 	for (;;) {
 		if (clicked) {
 			current_note++;
@@ -698,6 +731,7 @@ int main(void)
 		       num2str(notes[current_note].freq),
 		       notes[current_note].divisor);
 		spectrum_analyse();
+
 /*		spectrum_display(); */
 	}
 	return 0;
