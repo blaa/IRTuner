@@ -1,4 +1,5 @@
 #!/usr/bin/python
+# Generate data for program
 note_hz = [
     82.407,
     110.000,

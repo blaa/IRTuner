@@ -1,0 +1,11 @@
+Author: Tomasz bla Fortuna
+Homepage: http://bla.thera.be/article/infra-red-guitar-tuner
+
+Using IR LED illuminates a guitar string, and then measures 
+it's vibrations using IR phototransistor.
+
+FFT is not mine (see files for information on topic). There was
+not direct information AFAIK, but the page holding this code had 
+some annotations.
+
+License: GPLv3+, ask if in need for another
